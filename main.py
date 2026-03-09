@@ -142,19 +142,34 @@ def run_scanner():
                         tp2 = price * 0.925
                     stats["signals"] += 1
                     active_signals[pair] = action
-                    emoji = "🟢" if action == "LONG" else "🔴"
+emoji = "🟢" if action == "LONG" else "🔴"
                     tfs = [tf for tf in TIMEFRAMES if analyze_tf(pair, tf) == action]
-                    send_tele(
-                        f"{emoji} <b>{action} SIGNAL</b>\n"
-                        f"Pair: {pair}\n"
-                        f"Entry: ${fmt(price)}\n"
-                        f"TP1: ${fmt(tp1)} (+3%) 🎯\n"
-                        f"TP2: ${fmt(tp2)} (+5%) 💰\n"
-                        f"SL: ${fmt(sl)}\n"
-                        f"TF Confirm: {', '.join(tfs)}\n\n"
-                        f"📊 Total Signals: {stats['signals']}"
+                    tf_str = ", ".join(tfs)
+                    sl_pct = "(-1%)" if action == "LONG" else "(-1.5%)"
+                    trend = "Uptrend" if action == "LONG" else "Downtrend"
+                    stoch_dir = "oversold crossup" if action == "LONG" else "overbought crossdown"
+                    ema_dir = ">" if action == "LONG" else "<"
+                    msg = (
+                        "🚨 <b>SIGNAL ALERT!</b>\n"
+                        "━━━━━━━━━━━━━━\n"
+                        f"📌 Pair: {pair}\n"
+                        f"📊 Signal: {emoji} {action}\n"
+                        "━━━━━━━━━━━━━━\n"
+                        f"📈 Entry: ${fmt(price)}\n"
+                        f"🎯 TP1: ${fmt(tp1)} (+3%)\n"
+                        f"💰 TP2: ${fmt(tp2)} (+5%)\n"
+                        f"🛑 SL: ${fmt(sl)} {sl_pct}\n"
+                        "━━━━━━━━━━━━━━\n"
+                        "🔍 Analisis:\n"
+                        f"• EMA25 {ema_dir} EMA75 {ema_dir} EMA140 → {trend} ✅\n"
+                        f"• Stochastic {stoch_dir} ✅\n"
+                        f"• TF Confirm: {tf_str} ✅\n"
+                        "━━━━━━━━━━━━━━\n"
+                        f"📊 Win Rate: {get_winrate()}\n"
+                        f"⏰ TF: 5m/15m/30m | Binance"
                     )
-                    threading.Thread(target=monitor_signal, args=(pair, action, price, tp1, tp2, sl), daemon=True).start()
+                    send_tele(msg)
+                    .start()
             except: pass
         time.sleep(300)
 
