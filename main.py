@@ -10,7 +10,7 @@ from bs4 import BeautifulSoup
 app = Flask(__name__)
 TELEGRAM_TOKEN = "8218941018:AAEMUIKxhYjHBtdsTp_1cSQoKoN67g6pNvI"
 CHAT_ID = "1603606771"
-PAIRS = ["BTC/USDT","ETH/USDT","SOL/USDT","BNB/USDT","XRP/USDT","BANANA/USDT","SUI/USDT","AVA/USDT"]
+PAIRS = ["BTC/USDT","ETH/USDT","SOL/USDT","BNB/USDT","XRP/USDT","SUI/USDT","AVA/USDT","DOGE/USDT","HYPE/USDT","BCH/USDT","SHIB/USDT","ASTR/USDT"]
 TIMEFRAMES = ["5m", "15m", "30m"]
 stats = {"win": 0, "loss": 0, "signals": 0}
 active_signals = {}
