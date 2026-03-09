@@ -1,9 +1,11 @@
 import time, threading, math, requests
+from datetime import datetime, timezone
 from flask import Flask
 import ccxt
 import pandas as pd
 from ta.trend import EMAIndicator, MACD
 from ta.momentum import RSIIndicator, StochasticOscillator
+from bs4 import BeautifulSoup
 
 app = Flask(__name__)
 TELEGRAM_TOKEN = "8218941018:AAEMUIKxhYjHBtdsTp_1cSQoKoN67g6pNvI"
@@ -13,6 +15,7 @@ TIMEFRAMES = ["5m", "15m", "30m"]
 stats = {"win": 0, "loss": 0, "signals": 0}
 active_signals = {}
 exchange_global = ccxt.binance({"enableRateLimit": True})
+news_cache = {"events": [], "last_fetch": 0}
 
 def send_tele(msg):
     try:
@@ -33,6 +36,53 @@ def get_winrate():
         return "N/A (baru mulai)"
     wr = (stats["win"] / total) * 100
     return f"{wr:.1f}% ({stats['win']}W/{stats['loss']}L)"
+
+def fetch_ff_news():
+    try:
+        now = time.time()
+        if now - news_cache["last_fetch"] < 3600:
+            return news_cache["events"]
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Referer": "https://www.google.com/"
+        }
+        r = requests.get("https://www.forexfactory.com/calendar", headers=headers, timeout=15)
+        soup = BeautifulSoup(r.text, "html.parser")
+        events = []
+        rows = soup.select("tr.calendar__row")
+        current_time_str = None
+        for row in rows:
+            time_td = row.select_one("td.calendar__time")
+            if time_td and time_td.text.strip():
+                current_time_str = time_td.text.strip()
+            impact = row.select_one("td.calendar__impact span")
+            title_td = row.select_one("td.calendar__event")
+            currency_td = row.select_one("td.calendar__currency")
+            if impact and title_td and currency_td:
+                impact_class = impact.get("class", [])
+                impact_level = "low"
+                if any("high" in c for c in impact_class):
+                    impact_level = "high"
+                elif any("medium" in c for c in impact_class):
+                    impact_level = "medium"
+                events.append({
+                    "time": current_time_str or "?",
+                    "currency": currency_td.text.strip(),
+                    "title": title_td.text.strip(),
+                    "impact": impact_level
+                })
+        news_cache["events"] = events
+        news_cache["last_fetch"] = now
+        return events
+    except:
+        return news_cache.get("events", [])
+
+def get_high_impact_news():
+    events = fetch_ff_news()
+    high_events = [e for e in events if e["impact"] == "high"]
+    return high_events[:3] if high_events else []
 
 def analyze_tf(pair, tf):
     try:
@@ -95,20 +145,10 @@ def monitor_signal(pair, action, entry, tp1, tp2, sl):
             if action == "LONG":
                 if not tp1_hit and price >= tp1:
                     tp1_hit = True
-                    send_tele(
-                        f"🎯 <b>TP1 HIT!</b>\n"
-                        f"Pair: {pair}\nSignal: LONG\n"
-                        f"Entry: ${fmt(entry)}\nTP1: ${fmt(tp1)}\n\n"
-                        f"Holding for TP2: ${fmt(tp2)}..."
-                    )
+                    send_tele(f"🎯 <b>TP1 HIT!</b>\nPair: {pair}\nSignal: LONG\nEntry: ${fmt(entry)}\nTP1: ${fmt(tp1)}\n\nHolding for TP2: ${fmt(tp2)}...")
                 elif tp1_hit and price >= tp2:
                     stats["win"] += 1
-                    send_tele(
-                        f"💰 <b>TP2 HIT!</b>\n"
-                        f"Pair: {pair}\nSignal: LONG\n"
-                        f"Entry: ${fmt(entry)}\nTP2: ${fmt(tp2)}\n\n"
-                        f"📊 Win Rate: {get_winrate()}"
-                    )
+                    send_tele(f"💰 <b>TP2 HIT!</b>\nPair: {pair}\nSignal: LONG\nEntry: ${fmt(entry)}\nTP2: ${fmt(tp2)}\n\n📊 Win Rate: {get_winrate()}")
                     active_signals.pop(pair, None)
                     return
                 elif price <= sl:
@@ -116,31 +156,16 @@ def monitor_signal(pair, action, entry, tp1, tp2, sl):
                         send_tele(f"⚠️ <b>SL HIT after TP1</b>\nPair: {pair}\nPartial win\n\n📊 Win Rate: {get_winrate()}")
                     else:
                         stats["loss"] += 1
-                        send_tele(
-                            f"❌ <b>SL HIT!</b>\n"
-                            f"Pair: {pair}\nSignal: LONG\n"
-                            f"Entry: ${fmt(entry)}\nSL: ${fmt(sl)}\n\n"
-                            f"📊 Win Rate: {get_winrate()}"
-                        )
+                        send_tele(f"❌ <b>SL HIT!</b>\nPair: {pair}\nSignal: LONG\nEntry: ${fmt(entry)}\nSL: ${fmt(sl)}\n\n📊 Win Rate: {get_winrate()}")
                     active_signals.pop(pair, None)
                     return
             else:
                 if not tp1_hit and price <= tp1:
                     tp1_hit = True
-                    send_tele(
-                        f"🎯 <b>TP1 HIT!</b>\n"
-                        f"Pair: {pair}\nSignal: SHORT\n"
-                        f"Entry: ${fmt(entry)}\nTP1: ${fmt(tp1)}\n\n"
-                        f"Holding for TP2: ${fmt(tp2)}..."
-                    )
+                    send_tele(f"🎯 <b>TP1 HIT!</b>\nPair: {pair}\nSignal: SHORT\nEntry: ${fmt(entry)}\nTP1: ${fmt(tp1)}\n\nHolding for TP2: ${fmt(tp2)}...")
                 elif tp1_hit and price <= tp2:
                     stats["win"] += 1
-                    send_tele(
-                        f"💰 <b>TP2 HIT!</b>\n"
-                        f"Pair: {pair}\nSignal: SHORT\n"
-                        f"Entry: ${fmt(entry)}\nTP2: ${fmt(tp2)}\n\n"
-                        f"📊 Win Rate: {get_winrate()}"
-                    )
+                    send_tele(f"💰 <b>TP2 HIT!</b>\nPair: {pair}\nSignal: SHORT\nEntry: ${fmt(entry)}\nTP2: ${fmt(tp2)}\n\n📊 Win Rate: {get_winrate()}")
                     active_signals.pop(pair, None)
                     return
                 elif price >= sl:
@@ -148,12 +173,7 @@ def monitor_signal(pair, action, entry, tp1, tp2, sl):
                         send_tele(f"⚠️ <b>SL HIT after TP1</b>\nPair: {pair}\nPartial win\n\n📊 Win Rate: {get_winrate()}")
                     else:
                         stats["loss"] += 1
-                        send_tele(
-                            f"❌ <b>SL HIT!</b>\n"
-                            f"Pair: {pair}\nSignal: SHORT\n"
-                            f"Entry: ${fmt(entry)}\nSL: ${fmt(sl)}\n\n"
-                            f"📊 Win Rate: {get_winrate()}"
-                        )
+                        send_tele(f"❌ <b>SL HIT!</b>\nPair: {pair}\nSignal: SHORT\nEntry: ${fmt(entry)}\nSL: ${fmt(sl)}\n\n📊 Win Rate: {get_winrate()}")
                     active_signals.pop(pair, None)
                     return
         except:
@@ -165,7 +185,8 @@ def run_scanner():
         "🚀 <b>Bot 5m15m30m Started!</b>\n"
         f"Pairs: {len(PAIRS)}\n"
         "Strategy: 2-of-3 TF Confirmation\n"
-        "TP1: +3% (1:3) | TP2: +5% (1:5)\n\n"
+        "TP1: +3% (1:3) | TP2: +5% (1:5)\n"
+        "News: ForexFactory ✅\n\n"
         "Monitoring..."
     )
     while True:
@@ -198,6 +219,14 @@ def run_scanner():
                     emoji = "🟢" if action == "LONG" else "🔴"
                     tfs = [tf for tf in TIMEFRAMES if analyze_tf(pair, tf) == action]
                     tf_str = ", ".join(tfs) if tfs else "2/3 TF"
+
+                    # Get news
+                    news_events = get_high_impact_news()
+                    news_section = ""
+                    if news_events:
+                        news_lines = "\n".join([f"  ⚠️ {e['currency']} {e['title']} ({e['time']})" for e in news_events[:3]])
+                        news_section = f"\n🗞 <b>High Impact News Today:</b>\n{news_lines}\n⚠️ Hati-hati volatilitas!\n"
+
                     msg = (
                         f"🚨 <b>SIGNAL ALERT!</b>\n"
                         f"━━━━━━━━━━━━━━\n"
@@ -214,6 +243,7 @@ def run_scanner():
                         f"• Stochastic {stoch_dir} ✅\n"
                         f"• TF Confirm: {tf_str} ✅\n"
                         f"━━━━━━━━━━━━━━\n"
+                        f"{news_section}"
                         f"📊 Win Rate: {get_winrate()}\n"
                         f"⏰ TF: 5m/15m/30m | Binance"
                     )
