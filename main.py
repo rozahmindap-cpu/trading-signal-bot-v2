@@ -1,9 +1,8 @@
 import time, threading, math, requests
-from datetime import datetime, timezone
 from flask import Flask
 import ccxt
 import pandas as pd
-from ta.trend import EMAIndicator, MACD
+from ta.trend import EMAIndicator
 from ta.momentum import RSIIndicator, StochasticOscillator
 from bs4 import BeautifulSoup
 
@@ -11,9 +10,9 @@ app = Flask(__name__)
 TELEGRAM_TOKEN = "8218941018:AAEMUIKxhYjHBtdsTp_1cSQoKoN67g6pNvI"
 CHAT_ID = "1603606771"
 PAIRS = ["BTC/USDT","ETH/USDT","SOL/USDT","BNB/USDT","XRP/USDT","SUI/USDT","AVA/USDT","DOGE/USDT","HYPE/USDT","BCH/USDT","ASTER/USDT"]
-TIMEFRAMES = ["5m", "15m", "30m"]
 stats = {"win": 0, "loss": 0, "signals": 0}
 active_signals = {}
+alerted = {}
 exchange_global = ccxt.binance({"enableRateLimit": True, "options": {"defaultType": "future"}})
 news_cache = {"events": [], "last_fetch": 0}
 
@@ -84,56 +83,6 @@ def get_high_impact_news():
     high_events = [e for e in events if e["impact"] == "high"]
     return high_events[:3] if high_events else []
 
-def analyze_tf(pair, tf):
-    try:
-        ohlcv = exchange_global.fetch_ohlcv(pair, tf, limit=150)
-        df = pd.DataFrame(ohlcv, columns=["ts","open","high","low","close","vol"])
-        close = df["close"]
-        high = df["high"]
-        low = df["low"]
-        ema25 = EMAIndicator(close, 25).ema_indicator()
-        ema75 = EMAIndicator(close, 75).ema_indicator()
-        ema140 = EMAIndicator(close, 140).ema_indicator()
-        rsi = RSIIndicator(close, 14).rsi()
-        stoch = StochasticOscillator(high, low, close, 14, 3)
-        stoch_k = stoch.stoch()
-        stoch_d = stoch.stoch_signal()
-        i = -1
-        p = -2
-        long_signal = (
-            ema25.iloc[i] > ema75.iloc[i] > ema140.iloc[i] and
-            close.iloc[i] > ema25.iloc[i] and
-            stoch_k.iloc[i] > stoch_d.iloc[i] and
-            stoch_k.iloc[p] <= stoch_d.iloc[p] and
-            stoch_k.iloc[i] < 80 and
-            rsi.iloc[i] > 40
-        )
-        short_signal = (
-            ema25.iloc[i] < ema75.iloc[i] < ema140.iloc[i] and
-            close.iloc[i] < ema25.iloc[i] and
-            stoch_k.iloc[i] < stoch_d.iloc[i] and
-            stoch_k.iloc[p] >= stoch_d.iloc[p] and
-            stoch_k.iloc[i] > 20 and
-            rsi.iloc[i] < 60
-        )
-        if long_signal:
-            return "LONG"
-        if short_signal:
-            return "SHORT"
-        return None
-    except:
-        return None
-
-def check_pair(pair):
-    results = [analyze_tf(pair, tf) for tf in TIMEFRAMES]
-    long_count = results.count("LONG")
-    short_count = results.count("SHORT")
-    if long_count >= 2:
-        return "LONG"
-    if short_count >= 2:
-        return "SHORT"
-    return None
-
 def monitor_signal(pair, action, entry, tp1, tp2, sl):
     deadline = time.time() + 14400
     tp1_hit = False
@@ -182,10 +131,10 @@ def monitor_signal(pair, action, entry, tp1, tp2, sl):
 
 def run_scanner():
     send_tele(
-        "\U0001f680 <b>Bot 5m15m30m Started!</b>\n"
+        "\U0001f680 <b>Bot 5m Started!</b>\n"
         f"Pairs: {len(PAIRS)}\n"
         "Pairs: BTC ETH SOL BNB XRP SUI AVA DOGE HYPE BCH ASTER\n"
-        "Strategy: 2-of-3 TF Confirmation\n"
+        "Strategy: Single TF 5m\n"
         "TP1: +3% (1:3) | TP2: +5% (1:5)\n"
         "Exchange: Binance Futures \u2705\n"
         "News: ForexFactory \u2705\n\n"
@@ -196,61 +145,119 @@ def run_scanner():
             if pair in active_signals:
                 continue
             try:
-                action = check_pair(pair)
-                if action:
-                    ticker = exchange_global.fetch_ticker(pair)
-                    price = ticker["last"]
-                    if action == "LONG":
+                ohlcv = exchange_global.fetch_ohlcv(pair, "5m", limit=150)
+                df = pd.DataFrame(ohlcv, columns=["ts","open","high","low","close","vol"])
+                close = df["close"]
+                high = df["high"]
+                low = df["low"]
+                ema25 = EMAIndicator(close, 25).ema_indicator()
+                ema75 = EMAIndicator(close, 75).ema_indicator()
+                ema140 = EMAIndicator(close, 140).ema_indicator()
+                rsi = RSIIndicator(close, 14).rsi()
+                stoch = StochasticOscillator(high, low, close, 14, 3)
+                stoch_k = stoch.stoch()
+                stoch_d = stoch.stoch_signal()
+                i = -1
+                p = -2
+                price = close.iloc[i]
+                rsi_val = round(rsi.iloc[i], 1)
+                stoch_val = round(stoch_k.iloc[i], 1)
+                now = time.time()
+                last = alerted.get(pair, {})
+
+                long_signal = (
+                    ema25.iloc[i] > ema75.iloc[i] > ema140.iloc[i] and
+                    close.iloc[i] > ema25.iloc[i] and
+                    stoch_k.iloc[i] > stoch_d.iloc[i] and
+                    stoch_k.iloc[p] <= stoch_d.iloc[p] and
+                    stoch_k.iloc[i] < 80 and
+                    rsi.iloc[i] > 40
+                )
+                short_signal = (
+                    ema25.iloc[i] < ema75.iloc[i] < ema140.iloc[i] and
+                    close.iloc[i] < ema25.iloc[i] and
+                    stoch_k.iloc[i] < stoch_d.iloc[i] and
+                    stoch_k.iloc[p] >= stoch_d.iloc[p] and
+                    stoch_k.iloc[i] > 20 and
+                    rsi.iloc[i] < 60
+                )
+
+                if long_signal:
+                    if last.get("dir") != "LONG" or now - last.get("t", 0) > 14400:
+                        alerted[pair] = {"dir": "LONG", "t": now}
                         sl = price * 0.99
                         tp1 = price * 1.03
                         tp2 = price * 1.05
-                        sl_pct = "(-1%)"
-                        trend = "Uptrend"
-                        stoch_dir = "oversold crossup"
-                        ema_dir = ">"
-                    else:
+                        stats["signals"] += 1
+                        active_signals[pair] = "LONG"
+                        news_events = get_high_impact_news()
+                        news_section = ""
+                        if news_events:
+                            news_lines = "\n".join([f"  \u26a0\ufe0f {e['currency']} {e['title']} ({e['time']})" for e in news_events[:3]])
+                            news_section = f"\n\U0001f5de <b>High Impact News Today:</b>\n{news_lines}\n\u26a0\ufe0f Hati-hati volatilitas!\n"
+                        msg = (
+                            f"\U0001f6a8 <b>SIGNAL ALERT!</b>\n"
+                            f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
+                            f"\U0001f4cc Pair: {pair}\n"
+                            f"\U0001f4ca Signal: \U0001f7e2 LONG\n"
+                            f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
+                            f"\U0001f4c8 Entry: ${fmt(price)}\n"
+                            f"\U0001f3af TP1: ${fmt(tp1)} (+3%)\n"
+                            f"\U0001f4b0 TP2: ${fmt(tp2)} (+5%)\n"
+                            f"\U0001f6d1 SL: ${fmt(sl)} (-1%)\n"
+                            f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
+                            f"\U0001f50d Analisis:\n"
+                            f"\u2022 EMA25 > EMA75 > EMA140 \u2192 Uptrend \u2705\n"
+                            f"\u2022 Stochastic oversold crossup \u2705\n"
+                            f"\u2022 RSI: {rsi_val} | Stoch: {stoch_val} \u2705\n"
+                            f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
+                            f"{news_section}"
+                            f"\U0001f4ca Win Rate: {get_winrate()}\n"
+                            f"\u23f0 TF: 5m | Binance Futures"
+                        )
+                        send_tele(msg)
+                        threading.Thread(target=monitor_signal, args=(pair, "LONG", price, tp1, tp2, sl), daemon=True).start()
+
+                elif short_signal:
+                    if last.get("dir") != "SHORT" or now - last.get("t", 0) > 14400:
+                        alerted[pair] = {"dir": "SHORT", "t": now}
                         sl = price * 1.015
                         tp1 = price * 0.955
                         tp2 = price * 0.925
-                        sl_pct = "(-1.5%)"
-                        trend = "Downtrend"
-                        stoch_dir = "overbought crossdown"
-                        ema_dir = "<"
-                    stats["signals"] += 1
-                    active_signals[pair] = action
-                    emoji = "\U0001f7e2" if action == "LONG" else "\U0001f534"
-                    tfs = [tf for tf in TIMEFRAMES if analyze_tf(pair, tf) == action]
-                    tf_str = ", ".join(tfs) if tfs else "2/3 TF"
-                    news_events = get_high_impact_news()
-                    news_section = ""
-                    if news_events:
-                        news_lines = "\n".join([f"  \u26a0\ufe0f {e['currency']} {e['title']} ({e['time']})" for e in news_events[:3]])
-                        news_section = f"\n\U0001f5de <b>High Impact News Today:</b>\n{news_lines}\n\u26a0\ufe0f Hati-hati volatilitas!\n"
-                    msg = (
-                        f"\U0001f6a8 <b>SIGNAL ALERT!</b>\n"
-                        f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
-                        f"\U0001f4cc Pair: {pair}\n"
-                        f"\U0001f4ca Signal: {emoji} {action}\n"
-                        f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
-                        f"\U0001f4c8 Entry: ${fmt(price)}\n"
-                        f"\U0001f3af TP1: ${fmt(tp1)} (+3%)\n"
-                        f"\U0001f4b0 TP2: ${fmt(tp2)} (+5%)\n"
-                        f"\U0001f6d1 SL: ${fmt(sl)} {sl_pct}\n"
-                        f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
-                        f"\U0001f50d Analisis:\n"
-                        f"\u2022 EMA25 {ema_dir} EMA75 {ema_dir} EMA140 \u2192 {trend} \u2705\n"
-                        f"\u2022 Stochastic {stoch_dir} \u2705\n"
-                        f"\u2022 TF Confirm: {tf_str} \u2705\n"
-                        f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
-                        f"{news_section}"
-                        f"\U0001f4ca Win Rate: {get_winrate()}\n"
-                        f"\u23f0 TF: 5m/15m/30m | Binance Futures"
-                    )
-                    send_tele(msg)
-                    threading.Thread(target=monitor_signal, args=(pair, action, price, tp1, tp2, sl), daemon=True).start()
-            except:
-                pass
-        time.sleep(300)
+                        stats["signals"] += 1
+                        active_signals[pair] = "SHORT"
+                        news_events = get_high_impact_news()
+                        news_section = ""
+                        if news_events:
+                            news_lines = "\n".join([f"  \u26a0\ufe0f {e['currency']} {e['title']} ({e['time']})" for e in news_events[:3]])
+                            news_section = f"\n\U0001f5de <b>High Impact News Today:</b>\n{news_lines}\n\u26a0\ufe0f Hati-hati volatilitas!\n"
+                        msg = (
+                            f"\U0001f6a8 <b>SIGNAL ALERT!</b>\n"
+                            f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
+                            f"\U0001f4cc Pair: {pair}\n"
+                            f"\U0001f4ca Signal: \U0001f534 SHORT\n"
+                            f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
+                            f"\U0001f4c9 Entry: ${fmt(price)}\n"
+                            f"\U0001f3af TP1: ${fmt(tp1)} (-4.5%)\n"
+                            f"\U0001f4b0 TP2: ${fmt(tp2)} (-7.5%)\n"
+                            f"\U0001f6d1 SL: ${fmt(sl)} (+1.5%)\n"
+                            f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
+                            f"\U0001f50d Analisis:\n"
+                            f"\u2022 EMA25 < EMA75 < EMA140 \u2192 Downtrend \u2705\n"
+                            f"\u2022 Stochastic overbought crossdown \u2705\n"
+                            f"\u2022 RSI: {rsi_val} | Stoch: {stoch_val} \u2705\n"
+                            f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
+                            f"{news_section}"
+                            f"\U0001f4ca Win Rate: {get_winrate()}\n"
+                            f"\u23f0 TF: 5m | Binance Futures"
+                        )
+                        send_tele(msg)
+                        threading.Thread(target=monitor_signal, args=(pair, "SHORT", price, tp1, tp2, sl), daemon=True).start()
+                else:
+                    alerted[pair] = {}
+            except Exception as e:
+                print(str(e))
+        time.sleep(60)
 
 @app.route("/")
 def home():
