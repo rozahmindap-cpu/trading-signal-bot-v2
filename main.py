@@ -145,7 +145,7 @@ def run_scanner():
             if pair in active_signals:
                 continue
             try:
-                ohlcv = exchange_global.fetch_ohlcv(pair, "5m", limit=150)
+                ohlcv = exchange_global.fetch_ohlcv(pair, "1h", limit=150)
                 df = pd.DataFrame(ohlcv, columns=["ts","open","high","low","close","vol"])
                 close = df["close"]
                 high = df["high"]
@@ -223,7 +223,7 @@ def run_scanner():
                             f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
                             f"{news_section}"
                             f"\U0001f4ca Win Rate: {get_winrate()}\n"
-                            f"\u23f0 TF: 5m | Binance Futures"
+                            f"\u23f0 TF: 1H | Binance Futures"
                         )
                         send_tele(msg)
                         threading.Thread(target=monitor_signal, args=(pair, "LONG", price, tp1, tp2, sl), daemon=True).start()
@@ -259,7 +259,7 @@ def run_scanner():
                             f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
                             f"{news_section}"
                             f"\U0001f4ca Win Rate: {get_winrate()}\n"
-                            f"\u23f0 TF: 5m | Binance Futures"
+                            f"\u23f0 TF: 1H | Binance Futures"
                         )
                         send_tele(msg)
                         threading.Thread(target=monitor_signal, args=(pair, "SHORT", price, tp1, tp2, sl), daemon=True).start()
