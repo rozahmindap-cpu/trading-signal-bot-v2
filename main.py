@@ -179,7 +179,7 @@ def run_scanner():
                     stoch_k.iloc[i] > stoch_d.iloc[i] and
                     stoch_k.iloc[p] <= stoch_d.iloc[p] and
                     stoch_k.iloc[i] < 80 and
-                    rsi.iloc[i] > 40 and
+                    rsi.iloc[i] > 40
                 )
                 short_signal = (
                     ema25.iloc[i] < ema75.iloc[i] < ema140.iloc[i] and
@@ -187,7 +187,7 @@ def run_scanner():
                     stoch_k.iloc[i] < stoch_d.iloc[i] and
                     stoch_k.iloc[p] >= stoch_d.iloc[p] and
                     stoch_k.iloc[i] > 20 and
-                    rsi.iloc[i] < 60 and
+                    rsi.iloc[i] < 60
                 )
 
                 if long_signal:
