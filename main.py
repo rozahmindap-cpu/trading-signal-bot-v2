@@ -13,7 +13,7 @@ PAIRS = ["BTC/USDT","ETH/USDT","SOL/USDT","BNB/USDT","XRP/USDT","SUI/USDT","AVA/
 stats = {"win": 0, "loss": 0, "signals": 0}
 active_signals = {}
 alerted = {}
-exchange_global = ccxt.binance({"enableRateLimit": True, "options": {"defaultType": "future"}})
+exchange_global = ccxt.binanceusdm({"enableRateLimit": True})
 news_cache = {"events": [], "last_fetch": 0}
 
 def send_tele(msg):
