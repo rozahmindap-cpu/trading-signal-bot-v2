@@ -10,7 +10,7 @@ from bs4 import BeautifulSoup
 app = Flask(__name__)
 TELEGRAM_TOKEN = "8218941018:AAEMUIKxhYjHBtdsTp_1cSQoKoN67g6pNvI"
 CHAT_ID = "1603606771"
-PAIRS = ["BTC/USDT","ETH/USDT","SOL/USDT","BNB/USDT","XRP/USDT","SUI/USDT","AVA/USDT","DOGE/USDT","HYPE/USDT","BCH/USDT","SHIB/USDT","ASTR/USDT"]
+PAIRS = ["BTC/USDT","ETH/USDT","SOL/USDT","BNB/USDT","XRP/USDT","SUI/USDT","LINK/USDT","DOGE/USDT","AVAX/USDT","BCH/USDT","SHIB/USDT","ARB/USDT"]
 TIMEFRAMES = ["5m", "15m", "30m"]
 stats = {"win": 0, "loss": 0, "signals": 0}
 active_signals = {}
@@ -106,7 +106,7 @@ def analyze_tf(pair, tf):
             stoch_k.iloc[i] > stoch_d.iloc[i] and
             stoch_k.iloc[p] <= stoch_d.iloc[p] and
             stoch_k.iloc[i] < 80 and
-            rsi.iloc[i] > 45
+            rsi.iloc[i] > 40
         )
         short_signal = (
             ema25.iloc[i] < ema75.iloc[i] < ema140.iloc[i] and
@@ -114,7 +114,7 @@ def analyze_tf(pair, tf):
             stoch_k.iloc[i] < stoch_d.iloc[i] and
             stoch_k.iloc[p] >= stoch_d.iloc[p] and
             stoch_k.iloc[i] > 20 and
-            rsi.iloc[i] < 55
+            rsi.iloc[i] < 60
         )
         if long_signal:
             return "LONG"
@@ -184,6 +184,7 @@ def run_scanner():
     send_tele(
         "\U0001f680 <b>Bot 5m15m30m Started!</b>\n"
         f"Pairs: {len(PAIRS)}\n"
+        "Pairs: BTC ETH SOL BNB XRP SUI LINK DOGE AVAX BCH SHIB ARB\n"
         "Strategy: 2-of-3 TF Confirmation\n"
         "TP1: +3% (1:3) | TP2: +5% (1:5)\n"
         "Exchange: Binance Futures \u2705\n"
