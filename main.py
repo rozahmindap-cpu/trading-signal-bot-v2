@@ -135,7 +135,6 @@ def scan():
                         alerted[pair] = {"dir": "LONG", "t": now}
                         tp1, tp2, sl = calc_tp_sl(price, "LONG")
                         active_signals[pair] = "LONG"
-                        stats["win"] if False else None
                         msg = (
                             "\U0001f6a8 <b>SIGNAL ALERT!</b>\n"
                             "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
