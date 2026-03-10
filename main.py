@@ -14,7 +14,7 @@ PAIRS = ["BTC/USDT","ETH/USDT","SOL/USDT","BNB/USDT","XRP/USDT","SUI/USDT","AVA/
 TIMEFRAMES = ["5m", "15m", "30m"]
 stats = {"win": 0, "loss": 0, "signals": 0}
 active_signals = {}
-exchange_global = ccxt.binance({"enableRateLimit": True})
+exchange_global = ccxt.binance({"enableRateLimit": True, "options": {"defaultType": "future"}})
 news_cache = {"events": [], "last_fetch": 0}
 
 def send_tele(msg):
@@ -145,35 +145,35 @@ def monitor_signal(pair, action, entry, tp1, tp2, sl):
             if action == "LONG":
                 if not tp1_hit and price >= tp1:
                     tp1_hit = True
-                    send_tele(f"🎯 <b>TP1 HIT!</b>\nPair: {pair}\nSignal: LONG\nEntry: ${fmt(entry)}\nTP1: ${fmt(tp1)}\n\nHolding for TP2: ${fmt(tp2)}...")
+                    send_tele(f"\U0001f3af <b>TP1 HIT!</b>\nPair: {pair}\nSignal: LONG\nEntry: ${fmt(entry)}\nTP1: ${fmt(tp1)}\n\nHolding for TP2: ${fmt(tp2)}...")
                 elif tp1_hit and price >= tp2:
                     stats["win"] += 1
-                    send_tele(f"💰 <b>TP2 HIT!</b>\nPair: {pair}\nSignal: LONG\nEntry: ${fmt(entry)}\nTP2: ${fmt(tp2)}\n\n📊 Win Rate: {get_winrate()}")
+                    send_tele(f"\U0001f4b0 <b>TP2 HIT!</b>\nPair: {pair}\nSignal: LONG\nEntry: ${fmt(entry)}\nTP2: ${fmt(tp2)}\n\n\U0001f4ca Win Rate: {get_winrate()}")
                     active_signals.pop(pair, None)
                     return
                 elif price <= sl:
                     if tp1_hit:
-                        send_tele(f"⚠️ <b>SL HIT after TP1</b>\nPair: {pair}\nPartial win\n\n📊 Win Rate: {get_winrate()}")
+                        send_tele(f"\u26a0\ufe0f <b>SL HIT after TP1</b>\nPair: {pair}\nPartial win\n\n\U0001f4ca Win Rate: {get_winrate()}")
                     else:
                         stats["loss"] += 1
-                        send_tele(f"❌ <b>SL HIT!</b>\nPair: {pair}\nSignal: LONG\nEntry: ${fmt(entry)}\nSL: ${fmt(sl)}\n\n📊 Win Rate: {get_winrate()}")
+                        send_tele(f"\u274c <b>SL HIT!</b>\nPair: {pair}\nSignal: LONG\nEntry: ${fmt(entry)}\nSL: ${fmt(sl)}\n\n\U0001f4ca Win Rate: {get_winrate()}")
                     active_signals.pop(pair, None)
                     return
             else:
                 if not tp1_hit and price <= tp1:
                     tp1_hit = True
-                    send_tele(f"🎯 <b>TP1 HIT!</b>\nPair: {pair}\nSignal: SHORT\nEntry: ${fmt(entry)}\nTP1: ${fmt(tp1)}\n\nHolding for TP2: ${fmt(tp2)}...")
+                    send_tele(f"\U0001f3af <b>TP1 HIT!</b>\nPair: {pair}\nSignal: SHORT\nEntry: ${fmt(entry)}\nTP1: ${fmt(tp1)}\n\nHolding for TP2: ${fmt(tp2)}...")
                 elif tp1_hit and price <= tp2:
                     stats["win"] += 1
-                    send_tele(f"💰 <b>TP2 HIT!</b>\nPair: {pair}\nSignal: SHORT\nEntry: ${fmt(entry)}\nTP2: ${fmt(tp2)}\n\n📊 Win Rate: {get_winrate()}")
+                    send_tele(f"\U0001f4b0 <b>TP2 HIT!</b>\nPair: {pair}\nSignal: SHORT\nEntry: ${fmt(entry)}\nTP2: ${fmt(tp2)}\n\n\U0001f4ca Win Rate: {get_winrate()}")
                     active_signals.pop(pair, None)
                     return
                 elif price >= sl:
                     if tp1_hit:
-                        send_tele(f"⚠️ <b>SL HIT after TP1</b>\nPair: {pair}\nPartial win\n\n📊 Win Rate: {get_winrate()}")
+                        send_tele(f"\u26a0\ufe0f <b>SL HIT after TP1</b>\nPair: {pair}\nPartial win\n\n\U0001f4ca Win Rate: {get_winrate()}")
                     else:
                         stats["loss"] += 1
-                        send_tele(f"❌ <b>SL HIT!</b>\nPair: {pair}\nSignal: SHORT\nEntry: ${fmt(entry)}\nSL: ${fmt(sl)}\n\n📊 Win Rate: {get_winrate()}")
+                        send_tele(f"\u274c <b>SL HIT!</b>\nPair: {pair}\nSignal: SHORT\nEntry: ${fmt(entry)}\nSL: ${fmt(sl)}\n\n\U0001f4ca Win Rate: {get_winrate()}")
                     active_signals.pop(pair, None)
                     return
         except:
@@ -182,11 +182,12 @@ def monitor_signal(pair, action, entry, tp1, tp2, sl):
 
 def run_scanner():
     send_tele(
-        "🚀 <b>Bot 5m15m30m Started!</b>\n"
+        "\U0001f680 <b>Bot 5m15m30m Started!</b>\n"
         f"Pairs: {len(PAIRS)}\n"
         "Strategy: 2-of-3 TF Confirmation\n"
         "TP1: +3% (1:3) | TP2: +5% (1:5)\n"
-        "News: ForexFactory ✅\n\n"
+        "Exchange: Binance Futures \u2705\n"
+        "News: ForexFactory \u2705\n\n"
         "Monitoring..."
     )
     while True:
@@ -216,36 +217,33 @@ def run_scanner():
                         ema_dir = "<"
                     stats["signals"] += 1
                     active_signals[pair] = action
-                    emoji = "🟢" if action == "LONG" else "🔴"
+                    emoji = "\U0001f7e2" if action == "LONG" else "\U0001f534"
                     tfs = [tf for tf in TIMEFRAMES if analyze_tf(pair, tf) == action]
                     tf_str = ", ".join(tfs) if tfs else "2/3 TF"
-
-                    # Get news
                     news_events = get_high_impact_news()
                     news_section = ""
                     if news_events:
-                        news_lines = "\n".join([f"  ⚠️ {e['currency']} {e['title']} ({e['time']})" for e in news_events[:3]])
-                        news_section = f"\n🗞 <b>High Impact News Today:</b>\n{news_lines}\n⚠️ Hati-hati volatilitas!\n"
-
+                        news_lines = "\n".join([f"  \u26a0\ufe0f {e['currency']} {e['title']} ({e['time']})" for e in news_events[:3]])
+                        news_section = f"\n\U0001f5de <b>High Impact News Today:</b>\n{news_lines}\n\u26a0\ufe0f Hati-hati volatilitas!\n"
                     msg = (
-                        f"🚨 <b>SIGNAL ALERT!</b>\n"
-                        f"━━━━━━━━━━━━━━\n"
-                        f"📌 Pair: {pair}\n"
-                        f"📊 Signal: {emoji} {action}\n"
-                        f"━━━━━━━━━━━━━━\n"
-                        f"📈 Entry: ${fmt(price)}\n"
-                        f"🎯 TP1: ${fmt(tp1)} (+3%)\n"
-                        f"💰 TP2: ${fmt(tp2)} (+5%)\n"
-                        f"🛑 SL: ${fmt(sl)} {sl_pct}\n"
-                        f"━━━━━━━━━━━━━━\n"
-                        f"🔍 Analisis:\n"
-                        f"• EMA25 {ema_dir} EMA75 {ema_dir} EMA140 → {trend} ✅\n"
-                        f"• Stochastic {stoch_dir} ✅\n"
-                        f"• TF Confirm: {tf_str} ✅\n"
-                        f"━━━━━━━━━━━━━━\n"
+                        f"\U0001f6a8 <b>SIGNAL ALERT!</b>\n"
+                        f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
+                        f"\U0001f4cc Pair: {pair}\n"
+                        f"\U0001f4ca Signal: {emoji} {action}\n"
+                        f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
+                        f"\U0001f4c8 Entry: ${fmt(price)}\n"
+                        f"\U0001f3af TP1: ${fmt(tp1)} (+3%)\n"
+                        f"\U0001f4b0 TP2: ${fmt(tp2)} (+5%)\n"
+                        f"\U0001f6d1 SL: ${fmt(sl)} {sl_pct}\n"
+                        f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
+                        f"\U0001f50d Analisis:\n"
+                        f"\u2022 EMA25 {ema_dir} EMA75 {ema_dir} EMA140 \u2192 {trend} \u2705\n"
+                        f"\u2022 Stochastic {stoch_dir} \u2705\n"
+                        f"\u2022 TF Confirm: {tf_str} \u2705\n"
+                        f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
                         f"{news_section}"
-                        f"📊 Win Rate: {get_winrate()}\n"
-                        f"⏰ TF: 5m/15m/30m | Binance"
+                        f"\U0001f4ca Win Rate: {get_winrate()}\n"
+                        f"\u23f0 TF: 5m/15m/30m | Binance Futures"
                     )
                     send_tele(msg)
                     threading.Thread(target=monitor_signal, args=(pair, action, price, tp1, tp2, sl), daemon=True).start()
