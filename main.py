@@ -165,13 +165,22 @@ def run_scanner():
                 now = time.time()
                 last = alerted.get(pair, {})
 
+                # 1H trend filter
+                ohlcv_1h = exchange_global.fetch_ohlcv(pair, "1h", limit=50)
+                df_1h = pd.DataFrame(ohlcv_1h, columns=["ts","open","high","low","close","vol"])
+                ema25_1h = EMAIndicator(df_1h["close"], 25).ema_indicator()
+                ema75_1h = EMAIndicator(df_1h["close"], 75).ema_indicator()
+                trend_1h_bull = ema25_1h.iloc[-1] > ema75_1h.iloc[-1]
+                trend_1h_bear = ema25_1h.iloc[-1] < ema75_1h.iloc[-1]
+
                 long_signal = (
                     ema25.iloc[i] > ema75.iloc[i] > ema140.iloc[i] and
                     close.iloc[i] > ema25.iloc[i] and
                     stoch_k.iloc[i] > stoch_d.iloc[i] and
                     stoch_k.iloc[p] <= stoch_d.iloc[p] and
                     stoch_k.iloc[i] < 80 and
-                    rsi.iloc[i] > 40
+                    rsi.iloc[i] > 40 and
+                    trend_1h_bull
                 )
                 short_signal = (
                     ema25.iloc[i] < ema75.iloc[i] < ema140.iloc[i] and
@@ -179,7 +188,8 @@ def run_scanner():
                     stoch_k.iloc[i] < stoch_d.iloc[i] and
                     stoch_k.iloc[p] >= stoch_d.iloc[p] and
                     stoch_k.iloc[i] > 20 and
-                    rsi.iloc[i] < 60
+                    rsi.iloc[i] < 60 and
+                    trend_1h_bear
                 )
 
                 if long_signal:
