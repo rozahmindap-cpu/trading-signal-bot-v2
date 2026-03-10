@@ -131,10 +131,10 @@ def monitor_signal(pair, action, entry, tp1, tp2, sl):
 
 def run_scanner():
     send_tele(
-        "\U0001f680 <b>Bot 5m Started!</b>\n"
+        "\U0001f680 <b>Bot 1H Started!</b>\n"
         f"Pairs: {len(PAIRS)}\n"
         "Pairs: BTC ETH SOL BNB XRP SUI AVA DOGE HYPE BCH ASTER\n"
-        "Strategy: Single TF 5m\n"
+        "Strategy: Single TF 1H\n"
         "TP1: +3% (1:3) | TP2: +5% (1:5)\n"
         "Exchange: Binance Futures \u2705\n"
         "News: ForexFactory \u2705\n\n"
@@ -180,7 +180,6 @@ def run_scanner():
                     stoch_k.iloc[p] <= stoch_d.iloc[p] and
                     stoch_k.iloc[i] < 80 and
                     rsi.iloc[i] > 40 and
-                    trend_1h_bull
                 )
                 short_signal = (
                     ema25.iloc[i] < ema75.iloc[i] < ema140.iloc[i] and
@@ -189,7 +188,6 @@ def run_scanner():
                     stoch_k.iloc[p] >= stoch_d.iloc[p] and
                     stoch_k.iloc[i] > 20 and
                     rsi.iloc[i] < 60 and
-                    trend_1h_bear
                 )
 
                 if long_signal:
