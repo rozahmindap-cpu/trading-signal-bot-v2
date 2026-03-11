@@ -83,9 +83,9 @@ def scan():
     global exchange_global
     exchange_global = ccxt.binanceusdm({"enableRateLimit": True})
     send_tele(
-        "\U0001f680 <b>Bot 1H Started!</b>\n"
+        "\U0001f680 <b>Bot 5m Started!</b>\n"
         "Pairs: " + str(len(PAIRS)) + "\n"
-        "Strategy: Single TF 1H\n"
+        "Strategy: Single TF 5m\n"
         "TP1: +3% | TP2: +5% | SL: -1%"
     )
     while True:
@@ -93,7 +93,7 @@ def scan():
             if pair in active_signals:
                 continue
             try:
-                ohlcv = exchange_global.fetch_ohlcv(pair, "1h", limit=150)
+                ohlcv = exchange_global.fetch_ohlcv(pair, "5m", limit=150)
                 df = pd.DataFrame(ohlcv, columns=["t","o","h","l","c","v"])
                 close = df["c"]
                 high = df["h"]
@@ -152,7 +152,7 @@ def scan():
                             "\u2022 RSI: " + str(rsi_val) + " | Stoch: " + str(stoch_val) + " \u2705\n"
                             "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
                             "\U0001f4ca Win Rate: " + get_winrate() + "\n"
-                            "\u23f0 TF: 1H | Binance Futures"
+                            "\u23f0 TF: 5m | Binance Futures"
                         )
                         send_tele(msg)
                         threading.Thread(target=monitor_signal, args=(pair, "LONG", price, tp1, tp2, sl), daemon=True).start()
@@ -178,7 +178,7 @@ def scan():
                             "\u2022 RSI: " + str(rsi_val) + " | Stoch: " + str(stoch_val) + " \u2705\n"
                             "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
                             "\U0001f4ca Win Rate: " + get_winrate() + "\n"
-                            "\u23f0 TF: 1H | Binance Futures"
+                            "\u23f0 TF: 5m | Binance Futures"
                         )
                         send_tele(msg)
                         threading.Thread(target=monitor_signal, args=(pair, "SHORT", price, tp1, tp2, sl), daemon=True).start()
@@ -186,7 +186,7 @@ def scan():
                     alerted[pair] = {}
             except Exception as e:
                 print("scan err:", pair, e)
-        time.sleep(300)
+        time.sleep(60)
 
 threading.Thread(target=scan, daemon=True).start()
 
