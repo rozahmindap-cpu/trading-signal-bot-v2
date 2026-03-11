@@ -1,13 +1,19 @@
-from flask import Flask, request
-import requests, threading, time, ccxt, pandas as pd, math
-from ta.trend import EMAIndicator
-from ta.momentum import RSIIndicator, StochasticOscillator
+from flask import Flask
+import requests, threading, time, ccxt, pandas as pd, math, numpy as np
 
 app = Flask(__name__)
 
 BOT_TOKEN = "8218941018:AAEMUIKxhYjHBtdsTp_1cSQoKoN67g6pNvI"
 CHAT_ID = "1603606771"
 PAIRS = ["BTC/USDT:USDT","ETH/USDT:USDT","SOL/USDT:USDT","BNB/USDT:USDT","XRP/USDT:USDT","SUI/USDT:USDT","AVA/USDT:USDT","DOGE/USDT:USDT","HYPE/USDT:USDT","BCH/USDT:USDT","ASTER/USDT:USDT"]
+
+# Settings
+SS_SMOOTH = 5
+SS_FAST   = 50
+SS_SLOW   = 100
+ATR_LEN   = 27
+VWAP_LEN  = 27
+
 alerted = {}
 stats = {"win": 0, "loss": 0}
 active_signals = {}
@@ -38,6 +44,28 @@ def calc_tp_sl(price, action):
         return price * 1.03, price * 1.05, price * 0.99
     else:
         return price * 0.97, price * 0.95, price * 1.015
+
+def supersmoother(src, length):
+    """John Ehlers Supersmoother Filter"""
+    a1 = math.exp(-1.414 * math.pi / length)
+    b1 = 2 * a1 * math.cos(math.radians(1.414 * 180 / length))
+    c2 = b1
+    c3 = -(a1 ** 2)
+    c1 = 1 - c2 - c3
+    ss = np.zeros(len(src))
+    src_arr = src.values
+    for i in range(2, len(src_arr)):
+        ss[i] = c1 * (src_arr[i] + src_arr[i-1]) / 2 + c2 * ss[i-1] + c3 * ss[i-2]
+    return pd.Series(ss, index=src.index)
+
+def vwap_channel(high, low, close, volume, length):
+    """Rolling VWAP Price Channel"""
+    tp = (high + low + close) / 3
+    vwap = (tp * volume).rolling(length).sum() / volume.rolling(length).sum()
+    std = tp.rolling(length).std()
+    upper = vwap + std
+    lower = vwap - std
+    return vwap, upper, lower
 
 def monitor_signal(pair, action, entry, tp1, tp2, sl):
     tp1_hit = False
@@ -83,52 +111,51 @@ def scan():
     global exchange_global
     exchange_global = ccxt.binanceusdm({"enableRateLimit": True})
     send_tele(
-        "\U0001f680 <b>Bot 5m Started!</b>\n"
+        "\U0001f680 <b>Bot v2 Started!</b>\n"
         "Pairs: " + str(len(PAIRS)) + "\n"
-        "Strategy: Single TF 5m\n"
-        "TP1: +3% | TP2: +5% | SL: -1%"
+        "Strategy: Supersmoother Oscillator + VWAP Channel\n"
+        "TF: 5m | TP1: +3% | TP2: +5% | SL: -1%"
     )
     while True:
         for pair in PAIRS:
             if pair in active_signals:
                 continue
             try:
-                ohlcv = exchange_global.fetch_ohlcv(pair, "5m", limit=150)
+                ohlcv = exchange_global.fetch_ohlcv(pair, "5m", limit=300)
                 df = pd.DataFrame(ohlcv, columns=["t","o","h","l","c","v"])
                 close = df["c"]
-                high = df["h"]
-                low = df["l"]
-                ema25 = EMAIndicator(close, 25).ema_indicator()
-                ema75 = EMAIndicator(close, 75).ema_indicator()
-                ema140 = EMAIndicator(close, 140).ema_indicator()
-                rsi = RSIIndicator(close, 14).rsi()
-                stoch = StochasticOscillator(high, low, close, 14, 3)
-                stoch_k = stoch.stoch()
-                stoch_d = stoch.stoch_signal()
+                high  = df["h"]
+                low   = df["l"]
+                vol   = df["v"]
+
+                # --- Supersmoother Oscillator ---
+                smooth_price = supersmoother(close, SS_SMOOTH)
+                fast_ss      = supersmoother(smooth_price, SS_FAST)
+                slow_ss      = supersmoother(smooth_price, SS_SLOW)
+                osc          = fast_ss - slow_ss
+
+                # --- VWAP Price Channel ---
+                vwap, vwap_upper, vwap_lower = vwap_channel(high, low, close, vol, VWAP_LEN)
+
                 i = -1
                 p = -2
-                price = close.iloc[i]
-                rsi_val = round(rsi.iloc[i], 1)
-                stoch_val = round(stoch_k.iloc[i], 1)
-                now = time.time()
+
+                osc_curr  = osc.iloc[i]
+                osc_prev  = osc.iloc[p]
+                price     = close.iloc[i]
+                vwap_mid  = vwap.iloc[i]
+                vwap_up   = vwap_upper.iloc[i]
+                vwap_lo   = vwap_lower.iloc[i]
+
+                now  = time.time()
                 last = alerted.get(pair, {})
 
-                long_signal = (
-                    ema25.iloc[i] > ema75.iloc[i] > ema140.iloc[i] and
-                    close.iloc[i] > ema25.iloc[i] and
-                    stoch_k.iloc[i] > stoch_d.iloc[i] and
-                    stoch_k.iloc[p] <= stoch_d.iloc[p] and
-                    stoch_k.iloc[i] < 80 and
-                    rsi.iloc[i] > 40
-                )
-                short_signal = (
-                    ema25.iloc[i] < ema75.iloc[i] < ema140.iloc[i] and
-                    close.iloc[i] < ema25.iloc[i] and
-                    stoch_k.iloc[i] < stoch_d.iloc[i] and
-                    stoch_k.iloc[p] >= stoch_d.iloc[p] and
-                    stoch_k.iloc[i] > 20 and
-                    rsi.iloc[i] < 60
-                )
+                # Signal: oscillator crosses 0 + VWAP confirmation
+                long_signal  = osc_curr > 0 and osc_prev <= 0 and price > vwap_lo
+                short_signal = osc_curr < 0 and osc_prev >= 0 and price < vwap_up
+
+                osc_val  = round(float(osc_curr), 4)
+                vwap_val = round(float(vwap_mid), 4)
 
                 if long_signal:
                     if last.get("dir") != "LONG" or now - last.get("t", 0) > 14400:
@@ -147,9 +174,9 @@ def scan():
                             "\U0001f6d1 SL: $" + fmt(sl) + " (-1%)\n"
                             "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
                             "\U0001f50d <b>Analisis:</b>\n"
-                            "\u2022 EMA25 > EMA75 > EMA140 \u2192 Uptrend \u2705\n"
-                            "\u2022 Stochastic oversold crossup \u2705\n"
-                            "\u2022 RSI: " + str(rsi_val) + " | Stoch: " + str(stoch_val) + " \u2705\n"
+                            "\u2022 Supersmoother Osc cross \u2191 0 \u2705\n"
+                            "\u2022 Osc: " + str(osc_val) + "\n"
+                            "\u2022 VWAP: $" + fmt(vwap_val) + " | Price above lower band \u2705\n"
                             "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
                             "\U0001f4ca Win Rate: " + get_winrate() + "\n"
                             "\u23f0 TF: 5m | Binance Futures"
@@ -173,9 +200,9 @@ def scan():
                             "\U0001f6d1 SL: $" + fmt(sl) + " (+1.5%)\n"
                             "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
                             "\U0001f50d <b>Analisis:</b>\n"
-                            "\u2022 EMA25 < EMA75 < EMA140 \u2192 Downtrend \u2705\n"
-                            "\u2022 Stochastic overbought crossdown \u2705\n"
-                            "\u2022 RSI: " + str(rsi_val) + " | Stoch: " + str(stoch_val) + " \u2705\n"
+                            "\u2022 Supersmoother Osc cross \u2193 0 \u2705\n"
+                            "\u2022 Osc: " + str(osc_val) + "\n"
+                            "\u2022 VWAP: $" + fmt(vwap_val) + " | Price below upper band \u2705\n"
                             "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
                             "\U0001f4ca Win Rate: " + get_winrate() + "\n"
                             "\u23f0 TF: 5m | Binance Futures"
