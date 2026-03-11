@@ -11,7 +11,6 @@ PAIRS = ["BTC/USDT:USDT","ETH/USDT:USDT","SOL/USDT:USDT","BNB/USDT:USDT","XRP/US
 SS_SMOOTH = 5
 SS_FAST   = 50
 SS_SLOW   = 100
-ATR_LEN   = 27
 VWAP_LEN  = 27
 
 alerted = {}
@@ -46,7 +45,6 @@ def calc_tp_sl(price, action):
         return price * 0.97, price * 0.95, price * 1.015
 
 def supersmoother(src, length):
-    """John Ehlers Supersmoother Filter"""
     a1 = math.exp(-1.414 * math.pi / length)
     b1 = 2 * a1 * math.cos(math.radians(1.414 * 180 / length))
     c2 = b1
@@ -59,13 +57,36 @@ def supersmoother(src, length):
     return pd.Series(ss, index=src.index)
 
 def vwap_channel(high, low, close, volume, length):
-    """Rolling VWAP Price Channel"""
     tp = (high + low + close) / 3
     vwap = (tp * volume).rolling(length).sum() / volume.rolling(length).sum()
     std = tp.rolling(length).std()
-    upper = vwap + std
-    lower = vwap - std
-    return vwap, upper, lower
+    return vwap, vwap + std, vwap - std
+
+def get_signal(df):
+    """Returns 'LONG', 'SHORT', or None for a given OHLCV dataframe"""
+    close = df["c"]
+    high  = df["h"]
+    low   = df["l"]
+    vol   = df["v"]
+
+    smooth_price = supersmoother(close, SS_SMOOTH)
+    fast_ss      = supersmoother(smooth_price, SS_FAST)
+    slow_ss      = supersmoother(smooth_price, SS_SLOW)
+    osc          = fast_ss - slow_ss
+
+    vwap, vwap_upper, vwap_lower = vwap_channel(high, low, close, vol, VWAP_LEN)
+
+    osc_curr  = osc.iloc[-1]
+    osc_prev  = osc.iloc[-2]
+    price     = close.iloc[-1]
+    vwap_up   = vwap_upper.iloc[-1]
+    vwap_lo   = vwap_lower.iloc[-1]
+
+    if osc_curr > 0 and osc_prev <= 0 and price > vwap_lo:
+        return "LONG", float(osc_curr), float(vwap.iloc[-1])
+    elif osc_curr < 0 and osc_prev >= 0 and price < vwap_up:
+        return "SHORT", float(osc_curr), float(vwap.iloc[-1])
+    return None, float(osc_curr), float(vwap.iloc[-1])
 
 def monitor_signal(pair, action, entry, tp1, tp2, sl):
     tp1_hit = False
@@ -113,104 +134,88 @@ def scan():
     send_tele(
         "\U0001f680 <b>Bot v2 Started!</b>\n"
         "Pairs: " + str(len(PAIRS)) + "\n"
-        "Strategy: Supersmoother Oscillator + VWAP Channel\n"
-        "TF: 5m | TP1: +3% | TP2: +5% | SL: -1%"
+        "Strategy: Supersmoother Osc + VWAP Channel\n"
+        "TF: 1m + 15m (dual confirmation)\n"
+        "TP1: +3% | TP2: +5% | SL: -1%"
     )
     while True:
         for pair in PAIRS:
             if pair in active_signals:
                 continue
             try:
-                ohlcv = exchange_global.fetch_ohlcv(pair, "5m", limit=300)
-                df = pd.DataFrame(ohlcv, columns=["t","o","h","l","c","v"])
-                close = df["c"]
-                high  = df["h"]
-                low   = df["l"]
-                vol   = df["v"]
+                # Fetch both TFs
+                ohlcv_1m  = exchange_global.fetch_ohlcv(pair, "1m",  limit=300)
+                time.sleep(1)
+                ohlcv_15m = exchange_global.fetch_ohlcv(pair, "15m", limit=300)
 
-                # --- Supersmoother Oscillator ---
-                smooth_price = supersmoother(close, SS_SMOOTH)
-                fast_ss      = supersmoother(smooth_price, SS_FAST)
-                slow_ss      = supersmoother(smooth_price, SS_SLOW)
-                osc          = fast_ss - slow_ss
+                df_1m  = pd.DataFrame(ohlcv_1m,  columns=["t","o","h","l","c","v"])
+                df_15m = pd.DataFrame(ohlcv_15m, columns=["t","o","h","l","c","v"])
 
-                # --- VWAP Price Channel ---
-                vwap, vwap_upper, vwap_lower = vwap_channel(high, low, close, vol, VWAP_LEN)
+                sig_1m,  osc_1m,  vwap_1m  = get_signal(df_1m)
+                sig_15m, osc_15m, vwap_15m = get_signal(df_15m)
 
-                i = -1
-                p = -2
-
-                osc_curr  = osc.iloc[i]
-                osc_prev  = osc.iloc[p]
-                price     = close.iloc[i]
-                vwap_mid  = vwap.iloc[i]
-                vwap_up   = vwap_upper.iloc[i]
-                vwap_lo   = vwap_lower.iloc[i]
-
-                now  = time.time()
-                last = alerted.get(pair, {})
-
-                # Signal: oscillator crosses 0 + VWAP confirmation
-                long_signal  = osc_curr > 0 and osc_prev <= 0 and price > vwap_lo
-                short_signal = osc_curr < 0 and osc_prev >= 0 and price < vwap_up
-
-                osc_val  = round(float(osc_curr), 4)
-                vwap_val = round(float(vwap_mid), 4)
-
-                if long_signal:
-                    if last.get("dir") != "LONG" or now - last.get("t", 0) > 14400:
-                        alerted[pair] = {"dir": "LONG", "t": now}
-                        tp1, tp2, sl = calc_tp_sl(price, "LONG")
-                        active_signals[pair] = "LONG"
-                        msg = (
-                            "\U0001f6a8 <b>SIGNAL ALERT!</b>\n"
-                            "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
-                            "\U0001f4cc Pair: <b>" + pair + "</b>\n"
-                            "\U0001f4ca Signal: \U0001f7e2 <b>LONG</b>\n"
-                            "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
-                            "\U0001f4c8 Entry: <b>$" + fmt(price) + "</b>\n"
-                            "\U0001f3af TP1: $" + fmt(tp1) + " (+3%)\n"
-                            "\U0001f3af TP2: $" + fmt(tp2) + " (+5%)\n"
-                            "\U0001f6d1 SL: $" + fmt(sl) + " (-1%)\n"
-                            "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
-                            "\U0001f50d <b>Analisis:</b>\n"
-                            "\u2022 Supersmoother Osc cross \u2191 0 \u2705\n"
-                            "\u2022 Osc: " + str(osc_val) + "\n"
-                            "\u2022 VWAP: $" + fmt(vwap_val) + " | Price above lower band \u2705\n"
-                            "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
-                            "\U0001f4ca Win Rate: " + get_winrate() + "\n"
-                            "\u23f0 TF: 5m | Binance Futures"
-                        )
-                        send_tele(msg)
-                        threading.Thread(target=monitor_signal, args=(pair, "LONG", price, tp1, tp2, sl), daemon=True).start()
-                elif short_signal:
-                    if last.get("dir") != "SHORT" or now - last.get("t", 0) > 14400:
-                        alerted[pair] = {"dir": "SHORT", "t": now}
-                        tp1, tp2, sl = calc_tp_sl(price, "SHORT")
-                        active_signals[pair] = "SHORT"
-                        msg = (
-                            "\U0001f6a8 <b>SIGNAL ALERT!</b>\n"
-                            "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
-                            "\U0001f4cc Pair: <b>" + pair + "</b>\n"
-                            "\U0001f4ca Signal: \U0001f534 <b>SHORT</b>\n"
-                            "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
-                            "\U0001f4c9 Entry: <b>$" + fmt(price) + "</b>\n"
-                            "\U0001f3af TP1: $" + fmt(tp1) + " (-3%)\n"
-                            "\U0001f3af TP2: $" + fmt(tp2) + " (-5%)\n"
-                            "\U0001f6d1 SL: $" + fmt(sl) + " (+1.5%)\n"
-                            "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
-                            "\U0001f50d <b>Analisis:</b>\n"
-                            "\u2022 Supersmoother Osc cross \u2193 0 \u2705\n"
-                            "\u2022 Osc: " + str(osc_val) + "\n"
-                            "\u2022 VWAP: $" + fmt(vwap_val) + " | Price below upper band \u2705\n"
-                            "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
-                            "\U0001f4ca Win Rate: " + get_winrate() + "\n"
-                            "\u23f0 TF: 5m | Binance Futures"
-                        )
-                        send_tele(msg)
-                        threading.Thread(target=monitor_signal, args=(pair, "SHORT", price, tp1, tp2, sl), daemon=True).start()
-                else:
+                # Only signal if BOTH TFs agree
+                if sig_1m is None or sig_15m is None or sig_1m != sig_15m:
                     alerted[pair] = {}
+                    continue
+
+                action = sig_1m
+                price  = df_1m["c"].iloc[-1]
+                now    = time.time()
+                last   = alerted.get(pair, {})
+
+                dir_key = "LONG" if action == "LONG" else "SHORT"
+                if last.get("dir") == dir_key and now - last.get("t", 0) < 14400:
+                    continue
+
+                alerted[pair] = {"dir": dir_key, "t": now}
+                tp1, tp2, sl = calc_tp_sl(price, action)
+                active_signals[pair] = action
+
+                if action == "LONG":
+                    msg = (
+                        "\U0001f6a8 <b>SIGNAL ALERT!</b>\n"
+                        "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
+                        "\U0001f4cc Pair: <b>" + pair + "</b>\n"
+                        "\U0001f4ca Signal: \U0001f7e2 <b>LONG</b>\n"
+                        "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
+                        "\U0001f4c8 Entry: <b>$" + fmt(price) + "</b>\n"
+                        "\U0001f3af TP1: $" + fmt(tp1) + " (+3%)\n"
+                        "\U0001f3af TP2: $" + fmt(tp2) + " (+5%)\n"
+                        "\U0001f6d1 SL: $" + fmt(sl) + " (-1%)\n"
+                        "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
+                        "\U0001f50d <b>Konfirmasi:</b>\n"
+                        "\u2022 1m Osc: " + str(round(osc_1m, 4)) + " \u2191 \u2705\n"
+                        "\u2022 15m Osc: " + str(round(osc_15m, 4)) + " \u2191 \u2705\n"
+                        "\u2022 VWAP 1m: $" + fmt(vwap_1m) + "\n"
+                        "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
+                        "\U0001f4ca Win Rate: " + get_winrate() + "\n"
+                        "\u23f0 TF: 1m+15m | Binance Futures"
+                    )
+                else:
+                    msg = (
+                        "\U0001f6a8 <b>SIGNAL ALERT!</b>\n"
+                        "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
+                        "\U0001f4cc Pair: <b>" + pair + "</b>\n"
+                        "\U0001f4ca Signal: \U0001f534 <b>SHORT</b>\n"
+                        "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
+                        "\U0001f4c9 Entry: <b>$" + fmt(price) + "</b>\n"
+                        "\U0001f3af TP1: $" + fmt(tp1) + " (-3%)\n"
+                        "\U0001f3af TP2: $" + fmt(tp2) + " (-5%)\n"
+                        "\U0001f6d1 SL: $" + fmt(sl) + " (+1.5%)\n"
+                        "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
+                        "\U0001f50d <b>Konfirmasi:</b>\n"
+                        "\u2022 1m Osc: " + str(round(osc_1m, 4)) + " \u2193 \u2705\n"
+                        "\u2022 15m Osc: " + str(round(osc_15m, 4)) + " \u2193 \u2705\n"
+                        "\u2022 VWAP 1m: $" + fmt(vwap_1m) + "\n"
+                        "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
+                        "\U0001f4ca Win Rate: " + get_winrate() + "\n"
+                        "\u23f0 TF: 1m+15m | Binance Futures"
+                    )
+
+                send_tele(msg)
+                threading.Thread(target=monitor_signal, args=(pair, action, price, tp1, tp2, sl), daemon=True).start()
+
             except Exception as e:
                 print("scan err:", pair, e)
             time.sleep(3)
