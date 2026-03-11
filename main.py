@@ -186,7 +186,8 @@ def scan():
                     alerted[pair] = {}
             except Exception as e:
                 print("scan err:", pair, e)
-        time.sleep(60)
+            time.sleep(3)
+        time.sleep(300)
 
 threading.Thread(target=scan, daemon=True).start()
 
