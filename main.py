@@ -5,7 +5,7 @@ app = Flask(__name__)
 
 BOT_TOKEN = "8218941018:AAEMUIKxhYjHBtdsTp_1cSQoKoN67g6pNvI"
 CHAT_ID = "1603606771"
-PAIRS = ["BTC/USDT:USDT","ETH/USDT:USDT","SOL/USDT:USDT","BNB/USDT:USDT","XRP/USDT:USDT","SUI/USDT:USDT","AVA/USDT:USDT","DOGE/USDT:USDT","HYPE/USDT:USDT","BCH/USDT:USDT","ASTER/USDT:USDT"]
+PAIRS = ["BTC/USDT:USDT","ETH/USDT:USDT","SOL/USDT:USDT","BNB/USDT:USDT","XRP/USDT:USDT","SUI/USDT:USDT","DOGE/USDT:USDT","HYPE/USDT:USDT","BCH/USDT:USDT","ADA/USDT:USDT","LINK/USDT:USDT"]
 
 # Settings
 SS_SMOOTH = 5
@@ -127,16 +127,20 @@ def monitor_signal(pair, action, entry, tp1, tp2, sl):
                     active_signals.pop(pair, None); return
         except Exception as e:
             print("monitor err:", e)
+            time.sleep(60)
+    # Deadline reached — cleanup
+    active_signals.pop(pair, None)
 
 def scan():
     global exchange_global
-    exchange_global = ccxt.binanceusdm({"enableRateLimit": True})
+    exchange_global = ccxt.bybit({"enableRateLimit": True, "options": {"defaultType": "swap"}})
     send_tele(
         "\U0001f680 <b>Bot v2 Started!</b>\n"
         "Pairs: " + str(len(PAIRS)) + "\n"
         "Strategy: Supersmoother Osc + VWAP Channel\n"
-        "TF: 1m + 15m (dual confirmation)\n"
-        "TP1: +3% | TP2: +5% | SL: -1%"
+        "TF: 1m cross + 5m/15m confirm (any 1 agree)\n"
+        "TP1: +3% | TP2: +5% | SL: -1%\n"
+        "Exchange: Bybit"
     )
     while True:
         for pair in PAIRS:
@@ -151,11 +155,19 @@ def scan():
                 df_1m  = pd.DataFrame(ohlcv_1m,  columns=["t","o","h","l","c","v"])
                 df_15m = pd.DataFrame(ohlcv_15m, columns=["t","o","h","l","c","v"])
 
+                ohlcv_5m  = exchange_global.fetch_ohlcv(pair, "5m",  limit=300)
+                df_5m  = pd.DataFrame(ohlcv_5m,  columns=["t","o","h","l","c","v"])
+
                 sig_1m,  osc_1m,  vwap_1m  = get_signal(df_1m)
+                sig_5m,  osc_5m,  vwap_5m  = get_signal(df_5m)
                 sig_15m, osc_15m, vwap_15m = get_signal(df_15m)
 
-                # Only signal if BOTH TFs agree
-                if sig_1m is None or sig_15m is None or sig_1m != sig_15m:
+                # Signal if 1m cross + at least ONE of (5m or 15m) agrees in same direction
+                if sig_1m is None:
+                    alerted[pair] = {}
+                    continue
+                tf_confirm = (sig_5m == sig_1m) or (sig_15m == sig_1m)
+                if not tf_confirm:
                     alerted[pair] = {}
                     continue
 
@@ -190,7 +202,7 @@ def scan():
                         "\u2022 VWAP 1m: $" + fmt(vwap_1m) + "\n"
                         "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
                         "\U0001f4ca Win Rate: " + get_winrate() + "\n"
-                        "\u23f0 TF: 1m+15m | Binance Futures"
+                        "\u23f0 TF: 1m+15m | Bybit Futures"
                     )
                 else:
                     msg = (
@@ -210,7 +222,7 @@ def scan():
                         "\u2022 VWAP 1m: $" + fmt(vwap_1m) + "\n"
                         "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
                         "\U0001f4ca Win Rate: " + get_winrate() + "\n"
-                        "\u23f0 TF: 1m+15m | Binance Futures"
+                        "\u23f0 TF: 1m+15m | Bybit Futures"
                     )
 
                 send_tele(msg)
