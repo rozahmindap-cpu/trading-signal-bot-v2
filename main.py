@@ -7,11 +7,28 @@ BOT_TOKEN = "8218941018:AAEMUIKxhYjHBtdsTp_1cSQoKoN67g6pNvI"
 CHAT_ID = "1603606771"
 PAIRS = ["BTC/USDT:USDT","ETH/USDT:USDT","SOL/USDT:USDT","BNB/USDT:USDT","XRP/USDT:USDT","SUI/USDT:USDT","DOGE/USDT:USDT","HYPE/USDT:USDT","BCH/USDT:USDT","ADA/USDT:USDT","LINK/USDT:USDT"]
 
-# Settings
-SS_SMOOTH = 5
-SS_FAST   = 50
-SS_SLOW   = 100
-VWAP_LEN  = 27
+# ── Supertrend Parameters ────────────────────────────
+# 3 Supertrend layers with different multiplier/period combos
+# Optimized from Freqtrade hyperopt results
+ST_BUY = [
+    {"mult": 4, "period": 8},   # ST1 — fast
+    {"mult": 7, "period": 9},   # ST2 — medium
+    {"mult": 1, "period": 8},   # ST3 — sensitive
+]
+ST_SELL = [
+    {"mult": 1, "period": 16},  # ST1 — tight
+    {"mult": 3, "period": 18},  # ST2 — medium
+    {"mult": 6, "period": 18},  # ST3 — wide
+]
+
+# Trailing stop settings (from Freqtrade Supertrend strategy)
+TRAILING_STOP_PCT = 0.05          # 5% trailing
+TRAILING_ACTIVATE_PCT = 0.015     # activate after 1.5% profit
+
+# TP/SL
+TP1_PCT = 0.03   # +3%
+TP2_PCT = 0.05   # +5%
+SL_PCT  = 0.012  # -1.2% (tighter with Supertrend confirmation)
 
 alerted = {}
 stats = {"win": 0, "loss": 0}
@@ -26,10 +43,14 @@ def fmt(price):
     return str(round(price, decimals))
 
 def send_tele(msg):
-    requests.post(
-        "https://api.telegram.org/bot" + BOT_TOKEN + "/sendMessage",
-        json={"chat_id": CHAT_ID, "text": msg, "parse_mode": "HTML"}
-    )
+    try:
+        requests.post(
+            "https://api.telegram.org/bot" + BOT_TOKEN + "/sendMessage",
+            json={"chat_id": CHAT_ID, "text": msg, "parse_mode": "HTML"},
+            timeout=10,
+        )
+    except Exception as e:
+        print("Telegram error:", e)
 
 def get_winrate():
     total = stats["win"] + stats["loss"]
@@ -40,106 +61,196 @@ def get_winrate():
 
 def calc_tp_sl(price, action):
     if action == "LONG":
-        return price * 1.03, price * 1.05, price * 0.99
+        return price * (1 + TP1_PCT), price * (1 + TP2_PCT), price * (1 - SL_PCT)
     else:
-        return price * 0.97, price * 0.95, price * 1.015
+        return price * (1 - TP1_PCT), price * (1 - TP2_PCT), price * (1 + SL_PCT)
 
-def supersmoother(src, length):
-    a1 = math.exp(-1.414 * math.pi / length)
-    b1 = 2 * a1 * math.cos(math.radians(1.414 * 180 / length))
-    c2 = b1
-    c3 = -(a1 ** 2)
-    c1 = 1 - c2 - c3
-    ss = np.zeros(len(src))
-    src_arr = src.values
-    for i in range(2, len(src_arr)):
-        ss[i] = c1 * (src_arr[i] + src_arr[i-1]) / 2 + c2 * ss[i-1] + c3 * ss[i-2]
-    return pd.Series(ss, index=src.index)
+# ── Supertrend Indicator ─────────────────────────────
 
-def vwap_channel(high, low, close, volume, length):
-    tp = (high + low + close) / 3
-    vwap = (tp * volume).rolling(length).sum() / volume.rolling(length).sum()
-    std = tp.rolling(length).std()
-    return vwap, vwap + std, vwap - std
-
-def get_signal(df):
-    """Returns 'LONG', 'SHORT', or None for a given OHLCV dataframe"""
+def calc_atr(df, period):
+    """ATR calculation."""
+    high = df["h"]
+    low = df["l"]
     close = df["c"]
-    high  = df["h"]
-    low   = df["l"]
-    vol   = df["v"]
+    tr1 = high - low
+    tr2 = abs(high - close.shift(1))
+    tr3 = abs(low - close.shift(1))
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+    return tr.rolling(window=period).mean()
 
-    smooth_price = supersmoother(close, SS_SMOOTH)
-    fast_ss      = supersmoother(smooth_price, SS_FAST)
-    slow_ss      = supersmoother(smooth_price, SS_SLOW)
-    osc          = fast_ss - slow_ss
+def supertrend(df, multiplier, period):
+    """
+    Supertrend indicator.
+    Returns Series of 'up' or 'down' for each candle.
+    """
+    hl2 = (df["h"] + df["l"]) / 2
+    atr = calc_atr(df, period)
 
-    vwap, vwap_upper, vwap_lower = vwap_channel(high, low, close, vol, VWAP_LEN)
+    upper_band = hl2 + (multiplier * atr)
+    lower_band = hl2 - (multiplier * atr)
 
-    osc_curr  = osc.iloc[-1]
-    osc_prev  = osc.iloc[-2]
-    price     = close.iloc[-1]
-    vwap_up   = vwap_upper.iloc[-1]
-    vwap_lo   = vwap_lower.iloc[-1]
+    st_direction = pd.Series(index=df.index, dtype=object)
+    st_direction.iloc[0] = "up"
 
-    if osc_curr > 0 and osc_prev <= 0 and price > vwap_lo:
-        return "LONG", float(osc_curr), float(vwap.iloc[-1])
-    elif osc_curr < 0 and osc_prev >= 0 and price < vwap_up:
-        return "SHORT", float(osc_curr), float(vwap.iloc[-1])
-    return None, float(osc_curr), float(vwap.iloc[-1])
+    final_upper = upper_band.copy()
+    final_lower = lower_band.copy()
+
+    for i in range(1, len(df)):
+        # Lower band logic
+        if lower_band.iloc[i] > final_lower.iloc[i-1] or df["c"].iloc[i-1] < final_lower.iloc[i-1]:
+            final_lower.iloc[i] = lower_band.iloc[i]
+        else:
+            final_lower.iloc[i] = final_lower.iloc[i-1]
+
+        # Upper band logic
+        if upper_band.iloc[i] < final_upper.iloc[i-1] or df["c"].iloc[i-1] > final_upper.iloc[i-1]:
+            final_upper.iloc[i] = upper_band.iloc[i]
+        else:
+            final_upper.iloc[i] = final_upper.iloc[i-1]
+
+        # Direction
+        if st_direction.iloc[i-1] == "up":
+            if df["c"].iloc[i] < final_lower.iloc[i]:
+                st_direction.iloc[i] = "down"
+            else:
+                st_direction.iloc[i] = "up"
+        else:
+            if df["c"].iloc[i] > final_upper.iloc[i]:
+                st_direction.iloc[i] = "up"
+            else:
+                st_direction.iloc[i] = "down"
+
+    return st_direction
+
+# ── Signal Logic ─────────────────────────────────────
+
+def get_signal(df, st_params):
+    """
+    3x Supertrend must ALL agree for signal.
+    Returns 'LONG', 'SHORT', or None.
+    """
+    results = []
+    for p in st_params:
+        st = supertrend(df, p["mult"], p["period"])
+        results.append(st.iloc[-1])
+
+    # All 3 must be 'up' for LONG
+    if all(r == "up" for r in results):
+        return "LONG", results
+    # All 3 must be 'down' for SHORT
+    elif all(r == "down" for r in results):
+        return "SHORT", results
+    return None, results
+
+def check_signal(df):
+    """
+    Check both buy and sell supertrend sets.
+    Buy ST all 'up' = LONG signal
+    Sell ST all 'down' = SHORT signal
+    """
+    buy_sig, buy_details = get_signal(df, ST_BUY)
+    sell_sig, sell_details = get_signal(df, ST_SELL)
+
+    if buy_sig == "LONG":
+        return "LONG", buy_details, sell_details
+    elif sell_sig == "SHORT":
+        return "SHORT", buy_details, sell_details
+    return None, buy_details, sell_details
+
 
 def monitor_signal(pair, action, entry, tp1, tp2, sl):
+    """Monitor with trailing stop."""
     tp1_hit = False
-    deadline = time.time() + 14400
+    best_price = entry
+    trailing_active = False
+    trailing_sl = sl
+    deadline = time.time() + 14400  # 4 hours max
+
     while time.time() < deadline:
         try:
-            time.sleep(60)
+            time.sleep(45)  # check every 45s
             price = exchange_global.fetch_ticker(pair)["last"]
+
+            # Update best price and trailing stop
             if action == "LONG":
+                if price > best_price:
+                    best_price = price
+                profit_pct = (best_price - entry) / entry
+
+                # Activate trailing after threshold
+                if profit_pct >= TRAILING_ACTIVATE_PCT:
+                    trailing_active = True
+                    new_trail_sl = best_price * (1 - TRAILING_STOP_PCT)
+                    trailing_sl = max(trailing_sl, new_trail_sl, sl)
+
+                effective_sl = trailing_sl if trailing_active else sl
+
                 if not tp1_hit and price >= tp1:
                     tp1_hit = True
-                    send_tele("\U0001f3af <b>TP1 HIT!</b>\nPair: " + pair + "\nSignal: LONG\nTP1: $" + fmt(tp1) + "\n\nHolding for TP2: $" + fmt(tp2))
+                    send_tele("🎯 <b>TP1 HIT!</b>\nPair: " + pair + "\nSignal: LONG\nTP1: $" + fmt(tp1) + "\n\nHolding for TP2: $" + fmt(tp2) + "\nTrailing SL: $" + fmt(trailing_sl))
                 elif tp1_hit and price >= tp2:
                     stats["win"] += 1
-                    send_tele("\U0001f4b0 <b>TP2 HIT! WIN!</b>\nPair: " + pair + "\nSignal: LONG\nTP2: $" + fmt(tp2) + "\n\n\U0001f4ca Win Rate: " + get_winrate())
+                    send_tele("💰 <b>TP2 HIT! BIG WIN!</b>\nPair: " + pair + "\nSignal: LONG\nTP2: $" + fmt(tp2) + "\n\n📊 Win Rate: " + get_winrate())
                     active_signals.pop(pair, None); return
-                elif price <= sl:
-                    if tp1_hit:
-                        send_tele("\u26a0\ufe0f <b>SL HIT after TP1</b>\nPair: " + pair + "\nPartial win\n\n\U0001f4ca Win Rate: " + get_winrate())
+                elif price <= effective_sl:
+                    if tp1_hit or trailing_active:
+                        stats["win"] += 1
+                        pnl_pct = round((price - entry) / entry * 100, 2)
+                        send_tele("🔒 <b>Trailing SL — Profit Locked!</b>\nPair: " + pair + "\nP&L: " + str(pnl_pct) + "%\n\n📊 Win Rate: " + get_winrate())
                     else:
                         stats["loss"] += 1
-                        send_tele("\u274c <b>SL HIT!</b>\nPair: " + pair + "\nSignal: LONG\nSL: $" + fmt(sl) + "\n\n\U0001f4ca Win Rate: " + get_winrate())
+                        send_tele("❌ <b>SL HIT!</b>\nPair: " + pair + "\nSignal: LONG\nSL: $" + fmt(effective_sl) + "\n\n📊 Win Rate: " + get_winrate())
                     active_signals.pop(pair, None); return
-            else:
+
+            else:  # SHORT
+                if price < best_price:
+                    best_price = price
+                profit_pct = (entry - best_price) / entry
+
+                if profit_pct >= TRAILING_ACTIVATE_PCT:
+                    trailing_active = True
+                    new_trail_sl = best_price * (1 + TRAILING_STOP_PCT)
+                    trailing_sl = min(trailing_sl, new_trail_sl) if trailing_active else new_trail_sl
+                    trailing_sl = min(trailing_sl, sl)
+
+                effective_sl = trailing_sl if trailing_active else sl
+
                 if not tp1_hit and price <= tp1:
                     tp1_hit = True
-                    send_tele("\U0001f3af <b>TP1 HIT!</b>\nPair: " + pair + "\nSignal: SHORT\nTP1: $" + fmt(tp1) + "\n\nHolding for TP2: $" + fmt(tp2))
+                    send_tele("🎯 <b>TP1 HIT!</b>\nPair: " + pair + "\nSignal: SHORT\nTP1: $" + fmt(tp1) + "\n\nHolding for TP2: $" + fmt(tp2) + "\nTrailing SL: $" + fmt(trailing_sl))
                 elif tp1_hit and price <= tp2:
                     stats["win"] += 1
-                    send_tele("\U0001f4b0 <b>TP2 HIT! WIN!</b>\nPair: " + pair + "\nSignal: SHORT\nTP2: $" + fmt(tp2) + "\n\n\U0001f4ca Win Rate: " + get_winrate())
+                    send_tele("💰 <b>TP2 HIT! BIG WIN!</b>\nPair: " + pair + "\nSignal: SHORT\nTP2: $" + fmt(tp2) + "\n\n📊 Win Rate: " + get_winrate())
                     active_signals.pop(pair, None); return
-                elif price >= sl:
-                    if tp1_hit:
-                        send_tele("\u26a0\ufe0f <b>SL HIT after TP1</b>\nPair: " + pair + "\nPartial win\n\n\U0001f4ca Win Rate: " + get_winrate())
+                elif price >= effective_sl:
+                    if tp1_hit or trailing_active:
+                        stats["win"] += 1
+                        pnl_pct = round((entry - price) / entry * 100, 2)
+                        send_tele("🔒 <b>Trailing SL — Profit Locked!</b>\nPair: " + pair + "\nP&L: " + str(pnl_pct) + "%\n\n📊 Win Rate: " + get_winrate())
                     else:
                         stats["loss"] += 1
-                        send_tele("\u274c <b>SL HIT!</b>\nPair: " + pair + "\nSignal: SHORT\nSL: $" + fmt(sl) + "\n\n\U0001f4ca Win Rate: " + get_winrate())
+                        send_tele("❌ <b>SL HIT!</b>\nPair: " + pair + "\nSignal: SHORT\nSL: $" + fmt(effective_sl) + "\n\n📊 Win Rate: " + get_winrate())
                     active_signals.pop(pair, None); return
+
         except Exception as e:
             print("monitor err:", e)
             time.sleep(60)
-    # Deadline reached — cleanup
+
+    # Deadline reached
     active_signals.pop(pair, None)
+
 
 def scan():
     global exchange_global
     exchange_global = ccxt.bybit({"enableRateLimit": True, "options": {"defaultType": "swap"}})
     send_tele(
-        "\U0001f680 <b>Bot v2 Started!</b>\n"
+        "🚀 <b>Bot v2 Started — SUPERTREND!</b>\n"
+        "━━━━━━━━━━━━━━\n"
         "Pairs: " + str(len(PAIRS)) + "\n"
-        "Strategy: Supersmoother Osc + VWAP Channel\n"
-        "TF: 1m cross + 5m/15m confirm (any 1 agree)\n"
-        "TP1: +3% | TP2: +5% | SL: -1%\n"
+        "Strategy: 3x Supertrend + Trailing Stop\n"
+        "TF: 15m (primary) + 1H (confirm)\n"
+        "TP1: +3% | TP2: +5% | SL: -1.2%\n"
+        "Trailing: 5% after 1.5% profit\n"
         "Exchange: Bybit"
     )
     while True:
@@ -147,36 +258,41 @@ def scan():
             if pair in active_signals:
                 continue
             try:
-                # Fetch both TFs
-                ohlcv_1m  = exchange_global.fetch_ohlcv(pair, "1m",  limit=300)
+                # Primary: 15m timeframe
+                ohlcv_15m = exchange_global.fetch_ohlcv(pair, "15m", limit=200)
                 time.sleep(1)
-                ohlcv_15m = exchange_global.fetch_ohlcv(pair, "15m", limit=300)
+                # Confirm: 1H timeframe
+                ohlcv_1h = exchange_global.fetch_ohlcv(pair, "1h", limit=200)
 
-                df_1m  = pd.DataFrame(ohlcv_1m,  columns=["t","o","h","l","c","v"])
                 df_15m = pd.DataFrame(ohlcv_15m, columns=["t","o","h","l","c","v"])
+                df_1h  = pd.DataFrame(ohlcv_1h,  columns=["t","o","h","l","c","v"])
 
-                ohlcv_5m  = exchange_global.fetch_ohlcv(pair, "5m",  limit=300)
-                df_5m  = pd.DataFrame(ohlcv_5m,  columns=["t","o","h","l","c","v"])
+                # Get signals from both TFs
+                sig_15m, buy_det_15m, sell_det_15m = check_signal(df_15m)
+                sig_1h,  buy_det_1h,  sell_det_1h  = check_signal(df_1h)
 
-                sig_1m,  osc_1m,  vwap_1m  = get_signal(df_1m)
-                sig_5m,  osc_5m,  vwap_5m  = get_signal(df_5m)
-                sig_15m, osc_15m, vwap_15m = get_signal(df_15m)
-
-                # Signal if 1m cross + at least ONE of (5m or 15m) agrees in same direction
-                if sig_1m is None:
-                    alerted[pair] = {}
-                    continue
-                tf_confirm = (sig_5m == sig_1m) or (sig_15m == sig_1m)
-                if not tf_confirm:
-                    alerted[pair] = {}
+                # Need 15m signal + 1H confirmation (same direction)
+                if sig_15m is None:
                     continue
 
-                action = sig_1m
-                price  = df_1m["c"].iloc[-1]
+                # 1H must agree OR at least 2/3 supertrends agree on 1H
+                if sig_1h != sig_15m:
+                    # Check if at least 2/3 of buy/sell ST agree on 1H
+                    if sig_15m == "LONG":
+                        up_count = sum(1 for r in buy_det_1h if r == "up")
+                        if up_count < 2:
+                            continue
+                    else:
+                        down_count = sum(1 for r in sell_det_1h if r == "down")
+                        if down_count < 2:
+                            continue
+
+                action = sig_15m
+                price  = df_15m["c"].iloc[-1]
                 now    = time.time()
                 last   = alerted.get(pair, {})
 
-                dir_key = "LONG" if action == "LONG" else "SHORT"
+                dir_key = action
                 if last.get("dir") == dir_key and now - last.get("t", 0) < 14400:
                     continue
 
@@ -184,46 +300,37 @@ def scan():
                 tp1, tp2, sl = calc_tp_sl(price, action)
                 active_signals[pair] = action
 
+                # Build confirmation text
                 if action == "LONG":
-                    msg = (
-                        "\U0001f6a8 <b>SIGNAL ALERT!</b>\n"
-                        "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
-                        "\U0001f4cc Pair: <b>" + pair + "</b>\n"
-                        "\U0001f4ca Signal: \U0001f7e2 <b>LONG</b>\n"
-                        "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
-                        "\U0001f4c8 Entry: <b>$" + fmt(price) + "</b>\n"
-                        "\U0001f3af TP1: $" + fmt(tp1) + " (+3%)\n"
-                        "\U0001f3af TP2: $" + fmt(tp2) + " (+5%)\n"
-                        "\U0001f6d1 SL: $" + fmt(sl) + " (-1%)\n"
-                        "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
-                        "\U0001f50d <b>Konfirmasi:</b>\n"
-                        "\u2022 1m Osc: " + str(round(osc_1m, 4)) + " \u2191 \u2705\n"
-                        "\u2022 15m Osc: " + str(round(osc_15m, 4)) + " \u2191 \u2705\n"
-                        "\u2022 VWAP 1m: $" + fmt(vwap_1m) + "\n"
-                        "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
-                        "\U0001f4ca Win Rate: " + get_winrate() + "\n"
-                        "\u23f0 TF: 1m+15m | Bybit Futures"
-                    )
+                    st_txt = "".join(["🟢" if r == "up" else "🔴" for r in buy_det_15m])
+                    st_1h  = "".join(["🟢" if r == "up" else "🔴" for r in buy_det_1h])
+                    arrow = "🟢"
+                    direction = "LONG"
                 else:
-                    msg = (
-                        "\U0001f6a8 <b>SIGNAL ALERT!</b>\n"
-                        "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
-                        "\U0001f4cc Pair: <b>" + pair + "</b>\n"
-                        "\U0001f4ca Signal: \U0001f534 <b>SHORT</b>\n"
-                        "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
-                        "\U0001f4c9 Entry: <b>$" + fmt(price) + "</b>\n"
-                        "\U0001f3af TP1: $" + fmt(tp1) + " (-3%)\n"
-                        "\U0001f3af TP2: $" + fmt(tp2) + " (-5%)\n"
-                        "\U0001f6d1 SL: $" + fmt(sl) + " (+1.5%)\n"
-                        "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
-                        "\U0001f50d <b>Konfirmasi:</b>\n"
-                        "\u2022 1m Osc: " + str(round(osc_1m, 4)) + " \u2193 \u2705\n"
-                        "\u2022 15m Osc: " + str(round(osc_15m, 4)) + " \u2193 \u2705\n"
-                        "\u2022 VWAP 1m: $" + fmt(vwap_1m) + "\n"
-                        "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
-                        "\U0001f4ca Win Rate: " + get_winrate() + "\n"
-                        "\u23f0 TF: 1m+15m | Bybit Futures"
-                    )
+                    st_txt = "".join(["🔴" if r == "down" else "🟢" for r in sell_det_15m])
+                    st_1h  = "".join(["🔴" if r == "down" else "🟢" for r in sell_det_1h])
+                    arrow = "🔴"
+                    direction = "SHORT"
+
+                msg = (
+                    "🚨 <b>SUPERTREND SIGNAL!</b>\n"
+                    "━━━━━━━━━━━━━━\n"
+                    "📌 Pair: <b>" + pair + "</b>\n"
+                    "📊 Signal: " + arrow + " <b>" + direction + "</b>\n"
+                    "━━━━━━━━━━━━━━\n"
+                    "💵 Entry: <b>$" + fmt(price) + "</b>\n"
+                    "🎯 TP1: $" + fmt(tp1) + " (+" + str(TP1_PCT*100) + "%)\n"
+                    "🎯 TP2: $" + fmt(tp2) + " (+" + str(TP2_PCT*100) + "%)\n"
+                    "🛑 SL: $" + fmt(sl) + " (-" + str(SL_PCT*100) + "%)\n"
+                    "━━━━━━━━━━━━━━\n"
+                    "🔍 <b>Supertrend:</b>\n"
+                    "• 15m: " + st_txt + " ✅\n"
+                    "• 1H:  " + st_1h + "\n"
+                    "• Trailing: 5% after +1.5%\n"
+                    "━━━━━━━━━━━━━━\n"
+                    "📊 Win Rate: " + get_winrate() + "\n"
+                    "⏰ Bybit Futures | Supertrend v2"
+                )
 
                 send_tele(msg)
                 threading.Thread(target=monitor_signal, args=(pair, action, price, tp1, tp2, sl), daemon=True).start()
@@ -231,14 +338,16 @@ def scan():
             except Exception as e:
                 print("scan err:", pair, e)
             time.sleep(3)
-        time.sleep(300)
+        time.sleep(120)  # scan every 2 min (15m TF doesn't need 5min wait)
+
 
 threading.Thread(target=scan, daemon=True).start()
 
 @app.route("/")
 def home():
     total = stats["win"] + stats["loss"]
-    return "Bot Running! | Signals: " + str(total) + " | Win Rate: " + get_winrate(), 200
+    active = ", ".join([p + "(" + a + ")" for p, a in active_signals.items()]) or "none"
+    return "Supertrend Bot Running! | Signals: " + str(total) + " | Win Rate: " + get_winrate() + " | Active: " + active, 200
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080)
