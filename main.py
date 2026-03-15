@@ -1,5 +1,8 @@
 from flask import Flask
-import requests, threading, time, ccxt, pandas as pd, math, numpy as np
+import requests, threading, time, ccxt, pandas as pd, math, numpy as np, io
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 
 app = Flask(__name__)
 
@@ -51,6 +54,75 @@ def send_tele(msg):
         )
     except Exception as e:
         print("Telegram error:", e)
+
+def send_photo(image_buf, caption=""):
+    try:
+        requests.post(
+            "https://api.telegram.org/bot" + BOT_TOKEN + "/sendPhoto",
+            data={"chat_id": CHAT_ID, "caption": caption, "parse_mode": "HTML"},
+            files={"photo": ("chart.png", image_buf, "image/png")},
+            timeout=15,
+        )
+    except Exception as e:
+        print("Photo send error:", e)
+
+def generate_chart(df, pair, action, entry, tp1, tp2, sl, timeframe="15m"):
+    """Generate dark candlestick chart with entry/TP/SL lines."""
+    BG = "#0d1117"; UP = "#26a69a"; DN = "#ef5350"; GRID = "#1e2937"
+    TXT = "#c9d1d9"; ENTRY_C = "#58a6ff"; TP_C = "#3fb950"; SL_C = "#f85149"
+
+    plot_df = df.tail(60).reset_index(drop=True)
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 6),
+        gridspec_kw={"height_ratios": [3, 1]}, facecolor=BG)
+    ax1.set_facecolor(BG); ax2.set_facecolor(BG)
+
+    for i in range(len(plot_df)):
+        o, h, l, c = plot_df["o"].iloc[i], plot_df["h"].iloc[i], plot_df["l"].iloc[i], plot_df["c"].iloc[i]
+        color = UP if c >= o else DN
+        ax1.plot([i, i], [l, h], color=color, linewidth=0.8)
+        bb = min(o, c); bh = max(abs(c - o), (h - l) * 0.01)
+        ax1.bar(i, bh, bottom=bb, color=color, width=0.6, edgecolor=color, linewidth=0.5)
+
+    lx = len(plot_df) - 1
+    ax1.axhline(y=entry, color=ENTRY_C, linewidth=1.2, linestyle="--", alpha=0.9)
+    ax1.text(lx+1, entry, f" Entry ${fmt(entry)}", color=ENTRY_C, fontsize=7, va="center", fontweight="bold")
+    ax1.axhline(y=tp1, color=TP_C, linewidth=1, linestyle="--", alpha=0.7)
+    ax1.text(lx+1, tp1, f" TP1 ${fmt(tp1)}", color=TP_C, fontsize=7, va="center")
+    ax1.axhline(y=tp2, color=TP_C, linewidth=1, linestyle=":", alpha=0.5)
+    ax1.text(lx+1, tp2, f" TP2 ${fmt(tp2)}", color=TP_C, fontsize=7, va="center")
+    ax1.axhline(y=sl, color=SL_C, linewidth=1, linestyle="--", alpha=0.7)
+    ax1.text(lx+1, sl, f" SL ${fmt(sl)}", color=SL_C, fontsize=7, va="center")
+
+    for i in range(len(plot_df)):
+        vc = (UP + "80") if plot_df["c"].iloc[i] >= plot_df["o"].iloc[i] else (DN + "80")
+        ax2.bar(i, plot_df["v"].iloc[i], color=vc, width=0.6)
+
+    arrow = "🟢 LONG" if action == "LONG" else "🔴 SHORT"
+    ax1.set_title(f"{pair} - {timeframe} | {arrow} | Supertrend Bot", color=TXT, fontsize=11, fontweight="bold", pad=10)
+    ax1.grid(True, color=GRID, linewidth=0.3, alpha=0.5)
+    ax2.grid(True, color=GRID, linewidth=0.3, alpha=0.5)
+    for ax in [ax1, ax2]:
+        ax.tick_params(colors=TXT, labelsize=7)
+        for s in ["top","right"]: ax.spines[s].set_visible(False)
+        for s in ["bottom","left"]: ax.spines[s].set_color(GRID)
+
+    n = len(plot_df)
+    ticks = list(range(0, n, max(1, n // 6)))
+    if "t" in plot_df.columns:
+        tlabels = [pd.to_datetime(plot_df["t"].iloc[i], unit="ms").strftime("%H:%M") for i in ticks]
+    else:
+        tlabels = [str(i) for i in ticks]
+    ax2.set_xticks(ticks); ax2.set_xticklabels(tlabels, color=TXT, fontsize=7)
+    ax1.set_xticks([])
+    ax1.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"${x:,.2f}"))
+    ax2.set_ylabel("Vol", color=TXT, fontsize=7)
+
+    plt.tight_layout()
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=150, bbox_inches="tight", facecolor=BG, edgecolor="none")
+    plt.close(fig)
+    buf.seek(0)
+    return buf
 
 def get_winrate():
     total = stats["win"] + stats["loss"]
@@ -333,6 +405,15 @@ def scan():
                 )
 
                 send_tele(msg)
+
+                # Send chart image
+                try:
+                    chart_buf = generate_chart(df_15m, pair, action, price, tp1, tp2, sl, "15m")
+                    caption = "📊 " + pair + " — " + arrow + " " + direction + " | TF: 15m"
+                    send_photo(chart_buf, caption)
+                except Exception as ce:
+                    print("Chart error:", ce)
+
                 threading.Thread(target=monitor_signal, args=(pair, action, price, tp1, tp2, sl), daemon=True).start()
 
             except Exception as e:

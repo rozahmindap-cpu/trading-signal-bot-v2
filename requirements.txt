@@ -6,3 +6,5 @@ requests
 gunicorn
 beautifulsoup4
 lxml
+matplotlib
+numpy
