@@ -259,16 +259,15 @@ def monitor_signal(pair, action, entry, tp1, tp2, sl):
 
                 if not tp1_hit and price >= tp1:
                     tp1_hit = True
-                    send_tele("🎯 <b>TP1 HIT!</b>\nPair: " + pair + "\nSignal: LONG\nTP1: $" + fmt(tp1) + "\n\nHolding for TP2: $" + fmt(tp2) + "\nTrailing SL: $" + fmt(trailing_sl))
-                elif tp1_hit and price >= tp2:
                     stats["win"] += 1
-                    send_tele("💰 <b>TP2 HIT! BIG WIN!</b>\nPair: " + pair + "\nSignal: LONG\nTP2: $" + fmt(tp2) + "\n\n📊 Win Rate: " + get_winrate())
+                    send_tele("🎯 <b>TP1 HIT! WIN! ✅</b>\nPair: " + pair + "\nSignal: LONG\nTP1: $" + fmt(tp1) + "\n\n📊 Win Rate: " + get_winrate() + "\n\nStill watching for TP2: $" + fmt(tp2) + "\nTrailing SL: $" + fmt(trailing_sl))
+                elif tp1_hit and price >= tp2:
+                    send_tele("💰 <b>TP2 HIT! BONUS! 🚀</b>\nPair: " + pair + "\nSignal: LONG\nTP2: $" + fmt(tp2) + "\n\n(Win sudah dihitung di TP1)")
                     active_signals.pop(pair, None); return
                 elif price <= effective_sl:
-                    if tp1_hit or trailing_active:
-                        stats["win"] += 1
+                    if tp1_hit:
                         pnl_pct = round((price - entry) / entry * 100, 2)
-                        send_tele("🔒 <b>Trailing SL — Profit Locked!</b>\nPair: " + pair + "\nP&L: " + str(pnl_pct) + "%\n\n📊 Win Rate: " + get_winrate())
+                        send_tele("🔒 <b>Trailing SL — Profit Locked!</b>\nPair: " + pair + "\nP&L: " + str(pnl_pct) + "%\n\n(Win sudah dihitung di TP1)\n📊 Win Rate: " + get_winrate())
                     else:
                         stats["loss"] += 1
                         send_tele("❌ <b>SL HIT!</b>\nPair: " + pair + "\nSignal: LONG\nSL: $" + fmt(effective_sl) + "\n\n📊 Win Rate: " + get_winrate())
@@ -289,16 +288,15 @@ def monitor_signal(pair, action, entry, tp1, tp2, sl):
 
                 if not tp1_hit and price <= tp1:
                     tp1_hit = True
-                    send_tele("🎯 <b>TP1 HIT!</b>\nPair: " + pair + "\nSignal: SHORT\nTP1: $" + fmt(tp1) + "\n\nHolding for TP2: $" + fmt(tp2) + "\nTrailing SL: $" + fmt(trailing_sl))
-                elif tp1_hit and price <= tp2:
                     stats["win"] += 1
-                    send_tele("💰 <b>TP2 HIT! BIG WIN!</b>\nPair: " + pair + "\nSignal: SHORT\nTP2: $" + fmt(tp2) + "\n\n📊 Win Rate: " + get_winrate())
+                    send_tele("🎯 <b>TP1 HIT! WIN! ✅</b>\nPair: " + pair + "\nSignal: SHORT\nTP1: $" + fmt(tp1) + "\n\n📊 Win Rate: " + get_winrate() + "\n\nStill watching for TP2: $" + fmt(tp2) + "\nTrailing SL: $" + fmt(trailing_sl))
+                elif tp1_hit and price <= tp2:
+                    send_tele("💰 <b>TP2 HIT! BONUS! 🚀</b>\nPair: " + pair + "\nSignal: SHORT\nTP2: $" + fmt(tp2) + "\n\n(Win sudah dihitung di TP1)")
                     active_signals.pop(pair, None); return
                 elif price >= effective_sl:
-                    if tp1_hit or trailing_active:
-                        stats["win"] += 1
+                    if tp1_hit:
                         pnl_pct = round((entry - price) / entry * 100, 2)
-                        send_tele("🔒 <b>Trailing SL — Profit Locked!</b>\nPair: " + pair + "\nP&L: " + str(pnl_pct) + "%\n\n📊 Win Rate: " + get_winrate())
+                        send_tele("🔒 <b>Trailing SL — Profit Locked!</b>\nPair: " + pair + "\nP&L: " + str(pnl_pct) + "%\n\n(Win sudah dihitung di TP1)\n📊 Win Rate: " + get_winrate())
                     else:
                         stats["loss"] += 1
                         send_tele("❌ <b>SL HIT!</b>\nPair: " + pair + "\nSignal: SHORT\nSL: $" + fmt(effective_sl) + "\n\n📊 Win Rate: " + get_winrate())
